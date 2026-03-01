@@ -22,7 +22,7 @@ A voice-first RAG (Retrieval-Augmented Generation) application for making govern
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone <[repository-url](https://github.com/mahimasisodiya049-blip/Gram_vani)>
 cd gram-vani
 ```
 
