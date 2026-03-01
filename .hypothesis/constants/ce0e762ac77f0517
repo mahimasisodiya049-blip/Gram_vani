@@ -1,0 +1,4 @@
+# file: C:\Users\mahim\OneDrive\Desktop\AI_Avenger_GramVani\models\__init__.py
+# hypothesis_version: 6.151.9
+
+['DocumentMetadata', 'ErrorResponse', 'ProcessingResult', 'QueryResult', 'TextChunk', 'TranscriptionResult', 'UploadResult']
