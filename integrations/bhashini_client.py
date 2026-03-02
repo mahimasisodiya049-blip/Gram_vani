@@ -131,20 +131,43 @@ class BhashiniClient:
             )
             response.raise_for_status()
             
-            # Step 5: Parse response
+            # Step 5: Parse response with robust error handling
             result = response.json()
             
+            # Validate response structure
             if "pipelineResponse" not in result:
-                raise BhashiniClientError("Invalid response format from Bhashini STT API")
+                raise BhashiniClientError(f"Invalid response format from Bhashini STT API. Response: {result}")
             
-            output = result["pipelineResponse"][0].get("output", [{}])[0]
-            transcribed_text = output.get("source", "")
+            # Handle empty pipelineResponse
+            if not result["pipelineResponse"] or len(result["pipelineResponse"]) == 0:
+                raise BhashiniClientError("Empty pipelineResponse received from Bhashini API")
             
+            # Extract output with multiple fallback paths
+            pipeline_output = result["pipelineResponse"][0]
+            
+            # Try different possible response structures
+            transcribed_text = None
+            
+            # Path 1: output[0].source
+            if "output" in pipeline_output and pipeline_output["output"]:
+                if len(pipeline_output["output"]) > 0:
+                    transcribed_text = pipeline_output["output"][0].get("source", "")
+            
+            # Path 2: audio[0].source (alternative structure)
+            if not transcribed_text and "audio" in pipeline_output:
+                if pipeline_output["audio"] and len(pipeline_output["audio"]) > 0:
+                    transcribed_text = pipeline_output["audio"][0].get("source", "")
+            
+            # Path 3: Direct source field
             if not transcribed_text:
-                raise BhashiniClientError("Empty transcription received from Bhashini API")
+                transcribed_text = pipeline_output.get("source", "")
+            
+            # Validate transcribed text
+            if not transcribed_text or not transcribed_text.strip():
+                raise BhashiniClientError("Empty transcription received from Bhashini API. The audio may be unclear or too quiet.")
             
             return STTResult(
-                text=transcribed_text,
+                text=transcribed_text.strip(),
                 language=source_language,
                 confidence=1.0  # ULCA doesn't always provide confidence scores
             )

@@ -1,7 +1,7 @@
-"""Gram-Vani Streamlit Application.
+"""Gram-Vani Streamlit Application - Improved Version.
 
 A voice-first interface for querying government documents.
-Users can upload PDFs and ask questions via voice.
+Features: STT → RAG → Bedrock → TTS with loading spinners and chat UI.
 """
 
 import streamlit as st
@@ -9,12 +9,12 @@ from audio_recorder_streamlit import audio_recorder
 import time
 import os
 from pathlib import Path
-from integrations import BhashiniClient
+from integrations import BhashiniClient, BedrockClient, RAGEngine, AWSClientError
 from integrations.bhashini_client import BhashiniClientError
 
 # Page configuration
 st.set_page_config(
-    page_title="Gram-Vani",
+    page_title="Gram-Vani - AI Avenger",
     page_icon="🎙️",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -83,25 +83,6 @@ st.markdown("""
         margin-bottom: 1rem;
     }
     
-    /* Status messages */
-    .status-success {
-        padding: 1rem;
-        background: #d4edda;
-        border: 1px solid #c3e6cb;
-        border-radius: 8px;
-        color: #155724;
-        margin: 1rem 0;
-    }
-    
-    .status-info {
-        padding: 1rem;
-        background: #d1ecf1;
-        border: 1px solid #bee5eb;
-        border-radius: 8px;
-        color: #0c5460;
-        margin: 1rem 0;
-    }
-    
     /* Language selector */
     .language-section {
         text-align: center;
@@ -134,9 +115,15 @@ if 'audio_data' not in st.session_state:
     st.session_state.audio_data = None
 if 'processing_error' not in st.session_state:
     st.session_state.processing_error = None
+if 'generated_answer' not in st.session_state:
+    st.session_state.generated_answer = None
+if 'answer_audio' not in st.session_state:
+    st.session_state.answer_audio = None
+if 'processing_stage' not in st.session_state:
+    st.session_state.processing_stage = None
 
 # Header
-st.markdown('<div class="title">🎙️ Gram-Vani</div>', unsafe_allow_html=True)
+st.markdown('<div class="title">🎙️ Gram-Vani - AI Avenger</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">सरकारी दस्तावेज़ों को आवाज़ से समझें | Understand Government Documents with Voice</div>', unsafe_allow_html=True)
 
 # Language selection
@@ -152,6 +139,18 @@ with col2:
     st.session_state.selected_language = language
 st.markdown('</div>', unsafe_allow_html=True)
 
+# Language code mapping
+language_codes = {
+    'Hindi': 'hi',
+    'English': 'en',
+    'Tamil': 'ta',
+    'Telugu': 'te',
+    'Bengali': 'bn',
+    'Marathi': 'mr',
+    'Gujarati': 'gu',
+    'Kannada': 'kn'
+}
+
 # Main layout - Two columns
 col_left, col_right = st.columns([1, 1], gap="large")
 
@@ -163,18 +162,6 @@ with col_left:
             <div class="record-subtitle">Click the microphone to record your question</div>
         </div>
     """, unsafe_allow_html=True)
-    
-    # Language code mapping
-    language_codes = {
-        'Hindi': 'hi',
-        'English': 'en',
-        'Tamil': 'ta',
-        'Telugu': 'te',
-        'Bengali': 'bn',
-        'Marathi': 'mr',
-        'Gujarati': 'gu',
-        'Kannada': 'kn'
-    }
     
     # Audio recorder
     audio_bytes = audio_recorder(
@@ -190,8 +177,11 @@ with col_left:
     # Store audio in session state when recorded
     if audio_bytes and audio_bytes != st.session_state.audio_data:
         st.session_state.audio_data = audio_bytes
-        st.session_state.transcribed_text = None  # Reset transcription
+        st.session_state.transcribed_text = None
+        st.session_state.generated_answer = None
+        st.session_state.answer_audio = None
         st.session_state.processing_error = None
+        st.session_state.processing_stage = None
     
     if st.session_state.audio_data:
         st.success("✅ Audio recorded successfully!")
@@ -201,64 +191,115 @@ with col_left:
         
         # Process button
         if st.button("🔍 Process Question", type="primary", use_container_width=True):
-            # Get Bhashini credentials from environment
-            api_key = os.getenv("BHASHINI_API_KEY")
-            user_id = os.getenv("BHASHINI_USER_ID")
+            # Get credentials
+            bhashini_api_key = os.getenv("BHASHINI_API_KEY")
+            bhashini_user_id = os.getenv("BHASHINI_USER_ID")
             
-            if not api_key or not user_id:
-                st.error("⚠️ Bhashini credentials not configured. Please set BHASHINI_API_KEY and BHASHINI_USER_ID in your environment.")
+            if not bhashini_api_key or not bhashini_user_id:
+                st.error("⚠️ Bhashini credentials not configured.")
             else:
-                with st.spinner("🎤 Transcribing your question..."):
+                lang_code = language_codes.get(st.session_state.selected_language, 'hi')
+                
+                # Stage 1: Speech-to-Text
+                with st.spinner("🎤 AI Avenger is listening..."):
+                    st.session_state.processing_stage = "transcribing"
                     try:
-                        # Initialize Bhashini client
-                        client = BhashiniClient(
-                            ulca_api_key=api_key,
-                            ulca_user_id=user_id
+                        bhashini_client = BhashiniClient(
+                            ulca_api_key=bhashini_api_key,
+                            ulca_user_id=bhashini_user_id
                         )
                         
-                        # Get language code
-                        lang_code = language_codes.get(st.session_state.selected_language, 'hi')
-                        
-                        # Call STT API
-                        result = client.speech_to_text(
+                        stt_result = bhashini_client.speech_to_text(
                             audio=st.session_state.audio_data,
                             source_language=lang_code,
                             audio_format="wav",
                             sample_rate=16000
                         )
                         
-                        # Store transcribed text in session state
-                        if result and result.text:
-                            st.session_state.transcribed_text = result.text
+                        if stt_result and stt_result.text:
+                            st.session_state.transcribed_text = stt_result.text
                             st.session_state.processing_error = None
                         else:
-                            st.session_state.processing_error = "No text was transcribed. Please try speaking more clearly."
+                            st.session_state.processing_error = "No text transcribed. Please speak more clearly."
+                            st.session_state.processing_stage = None
                     
-                    except BhashiniClientError as e:
-                        st.session_state.processing_error = f"Bhashini API Error: {str(e)}"
-                    except ValueError as e:
-                        st.session_state.processing_error = f"Validation Error: {str(e)}"
-                    except Exception as e:
-                        st.session_state.processing_error = f"Unexpected Error: {str(e)}"
+                    except (BhashiniClientError, ValueError, Exception) as e:
+                        st.session_state.processing_error = f"Transcription Error: {str(e)}"
+                        st.session_state.processing_stage = None
+                
+                # Stage 2: Generate Answer
+                if st.session_state.transcribed_text and not st.session_state.processing_error:
+                    with st.spinner("🤖 AI Avenger is thinking..."):
+                        st.session_state.processing_stage = "generating"
+                        try:
+                            bedrock_client = BedrockClient(
+                                region_name=os.getenv("AWS_REGION", "us-east-1")
+                            )
+                            rag_engine = RAGEngine(bedrock_client=bedrock_client)
+                            
+                            context = rag_engine.retrieve_context(st.session_state.transcribed_text)
+                            
+                            answer = rag_engine.generate_answer(
+                                question=st.session_state.transcribed_text,
+                                context=context,
+                                language=lang_code
+                            )
+                            
+                            st.session_state.generated_answer = answer
+                        
+                        except AWSClientError as e:
+                            st.warning(f"⚠️ AWS Error: {str(e)}")
+                            st.session_state.generated_answer = rag_engine._get_fallback_message(lang_code)
+                        
+                        except Exception as e:
+                            st.error(f"❌ Generation Error: {str(e)}")
+                            st.session_state.generated_answer = rag_engine._get_fallback_message(lang_code)
+                    
+                    # Stage 3: Text-to-Speech
+                    if st.session_state.generated_answer:
+                        with st.spinner("🔊 AI Avenger is speaking..."):
+                            st.session_state.processing_stage = "synthesizing"
+                            try:
+                                tts_result = bhashini_client.text_to_speech(
+                                    text=st.session_state.generated_answer,
+                                    target_language=lang_code,
+                                    gender="female",
+                                    sample_rate=16000
+                                )
+                                
+                                st.session_state.answer_audio = tts_result.audio
+                            
+                            except (BhashiniClientError, Exception) as e:
+                                st.warning(f"⚠️ TTS Error: {str(e)}. Showing text only.")
+                                st.session_state.answer_audio = None
+                        
+                        st.session_state.processing_stage = "complete"
         
-        # Display transcribed text if available
+        # Display conversation in chat format
         if st.session_state.transcribed_text:
-            st.success("🎯 **Transcribed Question:**")
-            st.info(st.session_state.transcribed_text)
+            st.markdown("---")
+            st.markdown("### 💬 Conversation")
             
-            # Placeholder for answer generation
-            st.markdown("""
-                <div class="status-info">
-                    <strong>📝 Answer:</strong><br>
-                    Your answer will appear here based on the uploaded documents.
-                    (RAG pipeline integration coming soon)
-                </div>
-            """, unsafe_allow_html=True)
+            # User question
+            with st.chat_message("user", avatar="🗣️"):
+                st.markdown("**You asked:**")
+                st.markdown(st.session_state.transcribed_text)
+            
+            # AI answer
+            if st.session_state.generated_answer:
+                with st.chat_message("assistant", avatar="🤖"):
+                    st.markdown("**AI Avenger:**")
+                    st.markdown(st.session_state.generated_answer)
+                    
+                    # Auto-play audio response
+                    if st.session_state.answer_audio:
+                        st.audio(st.session_state.answer_audio, format="audio/wav", autoplay=True)
+                        st.caption("🔊 Audio response playing automatically")
         
-        # Display error if any
+        # Display error
         if st.session_state.processing_error:
             st.error(f"❌ {st.session_state.processing_error}")
-            st.info("💡 **Troubleshooting Tips:**\n- Ensure your microphone is working\n- Speak clearly and loudly\n- Check your internet connection\n- Verify Bhashini API credentials")
+            st.info("💡 **Tips:** Check microphone, speak clearly, verify credentials")
     
     # Instructions
     st.markdown("---")
@@ -267,7 +308,7 @@ with col_left:
         1. **Upload** government PDF documents (right side)
         2. **Select** your preferred language
         3. **Click** the microphone and ask your question
-        4. **Listen** to the simplified answer
+        4. **Listen** to the AI Avenger's answer
     """)
 
 # Right Column - PDF Upload
@@ -278,7 +319,6 @@ with col_right:
         </div>
     """, unsafe_allow_html=True)
     
-    # File uploader
     uploaded_files = st.file_uploader(
         "Drop PDF files here or click to browse",
         type=['pdf'],
@@ -288,9 +328,8 @@ with col_right:
     )
     
     if uploaded_files:
-        st.success(f"✅ {len(uploaded_files)} file(s) uploaded successfully!")
+        st.success(f"✅ {len(uploaded_files)} file(s) uploaded!")
         
-        # Display uploaded files
         st.markdown("### 📚 Uploaded Documents:")
         for idx, file in enumerate(uploaded_files, 1):
             col_a, col_b, col_c = st.columns([3, 1, 1])
@@ -302,7 +341,6 @@ with col_right:
                 if st.button("🗑️", key=f"delete_{idx}"):
                     st.info("File removed")
         
-        # Process documents button
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("📤 Process Documents", type="primary", use_container_width=True):
             with st.spinner("Processing documents..."):
@@ -311,7 +349,7 @@ with col_right:
                     time.sleep(0.01)
                     progress_bar.progress(i + 1)
                 
-                st.success("✅ Documents processed and indexed successfully!")
+                st.success("✅ Documents processed!")
                 st.balloons()
     else:
         st.info("👆 Upload PDF documents to get started")
