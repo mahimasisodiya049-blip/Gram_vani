@@ -9,8 +9,14 @@ from audio_recorder_streamlit import audio_recorder
 import time
 import os
 from pathlib import Path
-from integrations import BhashiniClient
+from integrations import BhashiniClient, AWS_AVAILABLE
 from integrations.bhashini_client import BhashiniClientError
+
+# Import AWS components if available
+if AWS_AVAILABLE:
+    from integrations import BedrockClient, RAGEngine, AWSClientError
+else:
+    st.warning("⚠️ AWS Bedrock not available. Install boto3 to enable answer generation: `pip install boto3`")
 
 # Page configuration
 st.set_page_config(
