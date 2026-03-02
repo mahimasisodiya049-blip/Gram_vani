@@ -4,14 +4,12 @@ This guide explains how to configure API credentials for both local development 
 
 ## Required Credentials
 
-### 1. Bhashini ULCA API (Required for STT/TTS)
-- **BHASHINI_API_KEY**: Your Bhashini API key
-- **BHASHINI_USER_ID**: Your Bhashini user ID
-
-### 2. AWS Credentials (Required for Bedrock/Answer Generation)
+### AWS Credentials (Required for all services)
 - **AWS_ACCESS_KEY_ID**: Your AWS access key
 - **AWS_SECRET_ACCESS_KEY**: Your AWS secret key
 - **AWS_REGION**: AWS region (default: us-east-1)
+
+**Note**: Bhashini API has been replaced with AWS Transcribe (STT) and AWS Polly (TTS) for better reliability.
 
 ## Setup Methods
 
@@ -20,9 +18,6 @@ This guide explains how to configure API credentials for both local development 
 1. **Create a `.env` file** in the project root:
 ```bash
 # .env file
-BHASHINI_API_KEY=your-bhashini-api-key-here
-BHASHINI_USER_ID=your-bhashini-user-id-here
-
 AWS_ACCESS_KEY_ID=your-aws-access-key-here
 AWS_SECRET_ACCESS_KEY=your-aws-secret-key-here
 AWS_REGION=us-east-1
@@ -43,8 +38,6 @@ load_dotenv()
 
 **Windows PowerShell:**
 ```powershell
-$env:BHASHINI_API_KEY="your-api-key"
-$env:BHASHINI_USER_ID="your-user-id"
 $env:AWS_ACCESS_KEY_ID="your-access-key"
 $env:AWS_SECRET_ACCESS_KEY="your-secret-key"
 $env:AWS_REGION="us-east-1"
@@ -52,8 +45,6 @@ $env:AWS_REGION="us-east-1"
 
 **Linux/Mac:**
 ```bash
-export BHASHINI_API_KEY="your-api-key"
-export BHASHINI_USER_ID="your-user-id"
 export AWS_ACCESS_KEY_ID="your-access-key"
 export AWS_SECRET_ACCESS_KEY="your-secret-key"
 export AWS_REGION="us-east-1"
@@ -66,10 +57,6 @@ export AWS_REGION="us-east-1"
 3. **Add secrets in TOML format**:
 
 ```toml
-# Bhashini ULCA API Credentials
-BHASHINI_API_KEY = "your-bhashini-api-key-here"
-BHASHINI_USER_ID = "your-bhashini-user-id-here"
-
 # AWS Credentials
 AWS_ACCESS_KEY_ID = "your-aws-access-key-here"
 AWS_SECRET_ACCESS_KEY = "your-aws-secret-key-here"
@@ -80,14 +67,6 @@ AWS_REGION = "us-east-1"
 
 ## Getting API Credentials
 
-### Bhashini ULCA API
-
-1. **Visit**: https://bhashini.gov.in/
-2. **Register** for an account
-3. **Navigate** to API section
-4. **Generate** API key and note your User ID
-5. **Copy** both values to your configuration
-
 ### AWS Credentials
 
 1. **Sign in** to AWS Console: https://console.aws.amazon.com/
@@ -97,10 +76,11 @@ AWS_REGION = "us-east-1"
    - Click "Create access key"
    - Choose "Application running outside AWS"
    - Download or copy the credentials
-4. **Enable Bedrock Access**:
-   - Go to AWS Bedrock console
-   - Request model access for Claude 3.5 Sonnet
-   - Wait for approval (usually instant)
+4. **Enable Required Services**:
+   - **Bedrock**: Request model access for Claude 3.5 Sonnet
+   - **Transcribe**: Enabled by default (no setup needed)
+   - **Polly**: Enabled by default (no setup needed)
+   - **S3**: Create bucket or allow auto-creation
 
 ### Required IAM Permissions
 
@@ -111,6 +91,7 @@ Your AWS user needs these permissions:
     "Version": "2012-10-17",
     "Statement": [
         {
+            "Sid": "BedrockAccess",
             "Effect": "Allow",
             "Action": [
                 "bedrock:InvokeModel",
@@ -121,15 +102,37 @@ Your AWS user needs these permissions:
             ]
         },
         {
+            "Sid": "TranscribeAccess",
             "Effect": "Allow",
             "Action": [
+                "transcribe:StartTranscriptionJob",
+                "transcribe:GetTranscriptionJob",
+                "transcribe:DeleteTranscriptionJob"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "PollyAccess",
+            "Effect": "Allow",
+            "Action": [
+                "polly:SynthesizeSpeech"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "S3Access",
+            "Effect": "Allow",
+            "Action": [
+                "s3:CreateBucket",
+                "s3:HeadBucket",
                 "s3:GetObject",
                 "s3:PutObject",
+                "s3:DeleteObject",
                 "s3:ListBucket"
             ],
             "Resource": [
-                "arn:aws:s3:::your-bucket-name/*",
-                "arn:aws:s3:::your-bucket-name"
+                "arn:aws:s3:::gram-vani-transcribe-*",
+                "arn:aws:s3:::gram-vani-transcribe-*/*"
             ]
         }
     ]
@@ -138,55 +141,21 @@ Your AWS user needs these permissions:
 
 ## Verification
 
-### Test Bhashini Credentials
+### Test AWS Services
 
 ```bash
-python test_bhashini_stt.py
-```
-
-Expected output:
-```
-✅ Credentials found
-✅ Bhashini client initialized
-```
-
-### Test AWS Bedrock Credentials
-
-```bash
-python test_bedrock.py
-```
-
-Expected output:
-```
-✅ AWS credentials found
-✅ Bedrock client initialized
-✅ Generation successful!
-```
-
-### Test in Streamlit App
-
-```bash
+# Test all AWS services together
 streamlit run app.py
 ```
 
 1. Record audio
 2. Click "Process Question"
-3. Should see: "🎤 AI Avenger is listening..."
+3. Should see: "🎤 AI Avenger is listening..." → "🤖 AI Avenger is thinking..." → "🔊 AI Avenger is speaking..."
 4. No error about missing credentials
 
 ## Troubleshooting
 
-### "Bhashini credentials not configured"
-
-**Cause**: BHASHINI_API_KEY or BHASHINI_USER_ID not set
-
-**Solutions**:
-1. Check `.env` file exists and has correct values
-2. Verify environment variables are set: `echo $env:BHASHINI_API_KEY` (Windows) or `echo $BHASHINI_API_KEY` (Linux/Mac)
-3. For Streamlit Cloud: Check secrets are added in dashboard
-4. Restart terminal/IDE after setting environment variables
-
-### "AWS Bedrock not available"
+### "AWS services not available"
 
 **Cause**: boto3 not installed
 
@@ -215,6 +184,26 @@ pip install boto3
 3. Request access to Claude 3.5 Sonnet
 4. Wait for approval (usually instant)
 5. Verify region supports the model (use us-east-1, us-west-2, or eu-west-1)
+
+### "Transcription failed" or "S3 upload failed"
+
+**Cause**: Missing Transcribe or S3 permissions
+
+**Solutions**:
+1. Verify IAM permissions include transcribe:* and s3:* actions
+2. Check S3 bucket name doesn't conflict (auto-created as `gram-vani-transcribe-{region}`)
+3. Ensure region supports Transcribe (most regions do)
+4. Check audio format is supported (WAV recommended)
+
+### "Polly error" or "TTS failed"
+
+**Cause**: Missing Polly permissions or unsupported voice
+
+**Solutions**:
+1. Verify IAM permissions include polly:SynthesizeSpeech
+2. Check language is supported (Hindi, English, Tamil, Telugu, Bengali)
+3. For Hindi: Uses Aditi (female) or Madhav (male) voices
+4. Ensure text is not empty
 
 ## Security Best Practices
 
@@ -255,13 +244,12 @@ gram-vani/
 
 ## Quick Start Checklist
 
-- [ ] Get Bhashini API credentials from https://bhashini.gov.in/
 - [ ] Get AWS credentials from AWS Console
 - [ ] Enable Bedrock model access for Claude 3.5 Sonnet
-- [ ] Create `.env` file with all credentials
-- [ ] Test with `python test_bhashini_stt.py`
-- [ ] Test with `python test_bedrock.py`
-- [ ] Run app with `streamlit run app.py`
+- [ ] Verify IAM permissions for Bedrock, Transcribe, Polly, and S3
+- [ ] Create `.env` file with AWS credentials
+- [ ] Install dependencies: `pip install -r requirements.txt`
+- [ ] Run app with `streamlit run app.py` or `streamlit run app_improved.py`
 - [ ] For Streamlit Cloud: Add secrets in dashboard
 
 ## Support
@@ -269,14 +257,15 @@ gram-vani/
 If you're still having issues:
 
 1. Check the logs for detailed error messages
-2. Run test scripts to isolate the problem
-3. Verify credentials are correct and active
-4. Check AWS service health dashboard
-5. Review Bhashini API documentation
+2. Verify credentials are correct and active
+3. Check AWS service health dashboard
+4. Ensure IAM permissions are correctly configured
+5. Test with simple audio recording first
 
 ## Resources
 
-- **Bhashini**: https://bhashini.gov.in/
 - **AWS Bedrock**: https://docs.aws.amazon.com/bedrock/
+- **AWS Transcribe**: https://docs.aws.amazon.com/transcribe/
+- **AWS Polly**: https://docs.aws.amazon.com/polly/
 - **Streamlit Secrets**: https://docs.streamlit.io/streamlit-community-cloud/deploy-your-app/secrets-management
 - **IAM Best Practices**: https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html

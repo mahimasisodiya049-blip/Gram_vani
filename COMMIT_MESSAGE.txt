@@ -1,0 +1,84 @@
+Migrate from Bhashini to AWS Transcribe and Polly for audio processing
+
+## Summary
+Replaced Bhashini ULCA API with AWS Transcribe (STT) and Polly (TTS) for improved reliability and better integration with existing AWS infrastructure.
+
+## Changes
+
+### New Files
+- integrations/aws_audio_client.py - AWS audio client with Transcribe and Polly
+- AWS_MIGRATION.md - Complete migration documentation
+- INTEGRATION_COMPLETE.md - Integration summary and checklist
+- DEPLOYMENT_GUIDE.md - Step-by-step deployment instructions
+- test_aws_audio.py - Integration test script
+
+### Modified Files
+- integrations/__init__.py - Added AWS audio client exports
+- app.py - Updated to use AWS audio services
+- app_improved.py - Complete AWS audio flow (STT → RAG → TTS)
+- SETUP_CREDENTIALS.md - Updated for AWS-only credentials
+- README.md - Updated features, tech stack, and language support
+- .streamlit/secrets.toml - Removed Bhashini, kept AWS only
+
+### Features
+- ✅ Speech-to-Text using Amazon Transcribe
+- ✅ Text-to-Speech using Amazon Polly (Aditi/Madhav voices for Hindi)
+- ✅ Automatic S3 bucket management for Transcribe
+- ✅ Support for 8 Indian languages
+- ✅ Comprehensive error handling and fallbacks
+- ✅ Auto-play audio responses (MP3 format)
+- ✅ Loading spinners for all processing stages
+
+### Technical Details
+- Transcribe workflow: Audio → S3 → Transcribe Job → Poll → Extract → Cleanup
+- Polly workflow: Text → Synthesize → MP3 audio
+- Maintained RAG logic with Bedrock (unchanged)
+- All AWS services use same boto3 session
+
+### Language Support
+- Hindi (hi-IN): Full support with Aditi/Madhav voices
+- English (en-US): Full support with Joanna voice
+- Tamil (ta-IN): Transcribe support, fallback TTS
+- Telugu (te-IN): Transcribe support, fallback TTS
+- Bengali (bn-IN): Transcribe support, fallback TTS
+- Marathi, Gujarati, Kannada: Limited support with fallbacks
+
+### IAM Permissions Required
+- bedrock:InvokeModel
+- transcribe:StartTranscriptionJob, GetTranscriptionJob, DeleteTranscriptionJob
+- polly:SynthesizeSpeech
+- s3:CreateBucket, HeadBucket, GetObject, PutObject, DeleteObject
+
+### Testing
+- ✅ All imports working
+- ✅ No syntax errors
+- ✅ Integration test passing
+- ✅ Apps load successfully
+
+### Documentation
+- Complete setup guide in SETUP_CREDENTIALS.md
+- Migration guide in AWS_MIGRATION.md
+- Deployment guide in DEPLOYMENT_GUIDE.md
+- Updated README with new tech stack
+
+### Breaking Changes
+- Removed dependency on Bhashini API credentials
+- Changed audio output format from WAV to MP3
+- Requires AWS credentials for all audio operations
+
+### Migration Path
+1. Update Streamlit Cloud secrets (remove Bhashini, keep AWS)
+2. Verify IAM permissions include Transcribe, Polly, S3
+3. Enable Bedrock model access
+4. Deploy and test
+
+### Cost Impact
+- Transcribe: $0.024/min (60 min/month free tier)
+- Polly: $4.00/1M chars (5M chars/month free tier)
+- Estimated: $0.012-$0.015 per complete interaction
+
+### Reason for Change
+Bhashini API was experiencing downtime on Streamlit Cloud, causing application failures. AWS services provide better reliability, uptime, and integration with existing infrastructure.
+
+Closes: Issue with Bhashini API downtime
+Refs: AWS_MIGRATION.md, DEPLOYMENT_GUIDE.md

@@ -9,14 +9,13 @@ from audio_recorder_streamlit import audio_recorder
 import time
 import os
 from pathlib import Path
-from integrations import BhashiniClient, AWS_AVAILABLE
-from integrations.bhashini_client import BhashiniClientError
+from integrations import AWS_AVAILABLE
 
 # Import AWS components if available
 if AWS_AVAILABLE:
-    from integrations import BedrockClient, RAGEngine, AWSClientError
+    from integrations import BedrockClient, RAGEngine, AWSClientError, AWSAudioClient, AWSAudioClientError
 else:
-    st.warning("⚠️ AWS Bedrock not available. Install boto3 to enable answer generation: `pip install boto3`")
+    st.warning("⚠️ AWS services not available. Install boto3 to enable audio processing and answer generation: `pip install boto3`")
 
 
 # Helper function to get credentials from secrets or environment
@@ -217,41 +216,34 @@ with col_left:
         
         # Process button
         if st.button("🔍 Process Question", type="primary", use_container_width=True):
-            # Get Bhashini credentials from secrets or environment
-            api_key = get_credential("BHASHINI_API_KEY")
-            user_id = get_credential("BHASHINI_USER_ID")
-            
-            if not api_key or not user_id:
-                st.error("⚠️ Bhashini credentials not configured. Please set BHASHINI_API_KEY and BHASHINI_USER_ID in your environment.")
+            if not AWS_AVAILABLE:
+                st.error("⚠️ AWS services not available. Please install boto3: `pip install boto3`")
             else:
-                with st.spinner("🎤 Transcribing your question..."):
+                with st.spinner("🎤 AI Avenger is listening..."):
                     try:
-                        # Initialize Bhashini client
-                        client = BhashiniClient(
-                            ulca_api_key=api_key,
-                            ulca_user_id=user_id
-                        )
+                        # Initialize AWS Audio client
+                        aws_region = get_credential("AWS_REGION", "us-east-1")
+                        audio_client = AWSAudioClient(region_name=aws_region)
                         
                         # Get language code
                         lang_code = language_codes.get(st.session_state.selected_language, 'hi')
                         
-                        # Call STT API
-                        result = client.speech_to_text(
+                        # Call Transcribe STT
+                        result = audio_client.speech_to_text(
                             audio=st.session_state.audio_data,
-                            source_language=lang_code,
-                            audio_format="wav",
-                            sample_rate=16000
+                            language=lang_code,
+                            audio_format="wav"
                         )
                         
                         # Store transcribed text in session state
-                        if result and result.text:
-                            st.session_state.transcribed_text = result.text
+                        if result and result.get('text'):
+                            st.session_state.transcribed_text = result['text']
                             st.session_state.processing_error = None
                         else:
                             st.session_state.processing_error = "No text was transcribed. Please try speaking more clearly."
                     
-                    except BhashiniClientError as e:
-                        st.session_state.processing_error = f"Bhashini API Error: {str(e)}"
+                    except AWSAudioClientError as e:
+                        st.session_state.processing_error = f"AWS Audio Error: {str(e)}"
                     except ValueError as e:
                         st.session_state.processing_error = f"Validation Error: {str(e)}"
                     except Exception as e:
@@ -349,6 +341,6 @@ st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 st.markdown("""
     <div style="text-align: center; color: #666; padding: 1rem;">
         <p>🇮🇳 Built for Digital India | Making Government Information Accessible</p>
-        <p style="font-size: 0.9rem;">Powered by Bhashini ULCA & AWS Bedrock</p>
+        <p style="font-size: 0.9rem;">Powered by AWS Transcribe, Polly & Bedrock</p>
     </div>
 """, unsafe_allow_html=True)

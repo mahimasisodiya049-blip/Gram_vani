@@ -9,8 +9,13 @@ from audio_recorder_streamlit import audio_recorder
 import time
 import os
 from pathlib import Path
-from integrations import BhashiniClient, BedrockClient, RAGEngine, AWSClientError
-from integrations.bhashini_client import BhashiniClientError
+from integrations import AWS_AVAILABLE
+
+# Import AWS components if available
+if AWS_AVAILABLE:
+    from integrations import BedrockClient, RAGEngine, AWSClientError, AWSAudioClient, AWSAudioClientError
+else:
+    st.warning("⚠️ AWS services not available. Install boto3 to enable audio processing and answer generation: `pip install boto3`")
 
 # Page configuration
 st.set_page_config(
@@ -191,39 +196,35 @@ with col_left:
         
         # Process button
         if st.button("🔍 Process Question", type="primary", use_container_width=True):
-            # Get credentials
-            bhashini_api_key = os.getenv("BHASHINI_API_KEY")
-            bhashini_user_id = os.getenv("BHASHINI_USER_ID")
-            
-            if not bhashini_api_key or not bhashini_user_id:
-                st.error("⚠️ Bhashini credentials not configured.")
+            if not AWS_AVAILABLE:
+                st.error("⚠️ AWS services not available. Please install boto3: `pip install boto3`")
             else:
                 lang_code = language_codes.get(st.session_state.selected_language, 'hi')
+                aws_region = os.getenv("AWS_REGION", "us-east-1")
+                
+                # Initialize AWS clients
+                audio_client = AWSAudioClient(region_name=aws_region)
+                bedrock_client = BedrockClient(region_name=aws_region)
+                rag_engine = RAGEngine(bedrock_client=bedrock_client)
                 
                 # Stage 1: Speech-to-Text
                 with st.spinner("🎤 AI Avenger is listening..."):
                     st.session_state.processing_stage = "transcribing"
                     try:
-                        bhashini_client = BhashiniClient(
-                            ulca_api_key=bhashini_api_key,
-                            ulca_user_id=bhashini_user_id
-                        )
-                        
-                        stt_result = bhashini_client.speech_to_text(
+                        stt_result = audio_client.speech_to_text(
                             audio=st.session_state.audio_data,
-                            source_language=lang_code,
-                            audio_format="wav",
-                            sample_rate=16000
+                            language=lang_code,
+                            audio_format="wav"
                         )
                         
-                        if stt_result and stt_result.text:
-                            st.session_state.transcribed_text = stt_result.text
+                        if stt_result and stt_result.get('text'):
+                            st.session_state.transcribed_text = stt_result['text']
                             st.session_state.processing_error = None
                         else:
                             st.session_state.processing_error = "No text transcribed. Please speak more clearly."
                             st.session_state.processing_stage = None
                     
-                    except (BhashiniClientError, ValueError, Exception) as e:
+                    except (AWSAudioClientError, ValueError, Exception) as e:
                         st.session_state.processing_error = f"Transcription Error: {str(e)}"
                         st.session_state.processing_stage = None
                 
@@ -232,11 +233,6 @@ with col_left:
                     with st.spinner("🤖 AI Avenger is thinking..."):
                         st.session_state.processing_stage = "generating"
                         try:
-                            bedrock_client = BedrockClient(
-                                region_name=os.getenv("AWS_REGION", "us-east-1")
-                            )
-                            rag_engine = RAGEngine(bedrock_client=bedrock_client)
-                            
                             context = rag_engine.retrieve_context(st.session_state.transcribed_text)
                             
                             answer = rag_engine.generate_answer(
@@ -260,16 +256,15 @@ with col_left:
                         with st.spinner("🔊 AI Avenger is speaking..."):
                             st.session_state.processing_stage = "synthesizing"
                             try:
-                                tts_result = bhashini_client.text_to_speech(
+                                tts_audio = audio_client.text_to_speech(
                                     text=st.session_state.generated_answer,
-                                    target_language=lang_code,
-                                    gender="female",
-                                    sample_rate=16000
+                                    language=lang_code,
+                                    gender="female"
                                 )
                                 
-                                st.session_state.answer_audio = tts_result.audio
+                                st.session_state.answer_audio = tts_audio
                             
-                            except (BhashiniClientError, Exception) as e:
+                            except (AWSAudioClientError, Exception) as e:
                                 st.warning(f"⚠️ TTS Error: {str(e)}. Showing text only.")
                                 st.session_state.answer_audio = None
                         
@@ -293,7 +288,7 @@ with col_left:
                     
                     # Auto-play audio response
                     if st.session_state.answer_audio:
-                        st.audio(st.session_state.answer_audio, format="audio/wav", autoplay=True)
+                        st.audio(st.session_state.answer_audio, format="audio/mp3", autoplay=True)
                         st.caption("🔊 Audio response playing automatically")
         
         # Display error
@@ -371,6 +366,6 @@ st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 st.markdown("""
     <div style="text-align: center; color: #666; padding: 1rem;">
         <p>🇮🇳 Built for Digital India | Making Government Information Accessible</p>
-        <p style="font-size: 0.9rem;">Powered by Bhashini ULCA & AWS Bedrock</p>
+        <p style="font-size: 0.9rem;">Powered by AWS Transcribe, Polly & Bedrock</p>
     </div>
 """, unsafe_allow_html=True)
