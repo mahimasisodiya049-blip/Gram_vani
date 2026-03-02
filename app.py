@@ -18,6 +18,16 @@ if AWS_AVAILABLE:
 else:
     st.warning("⚠️ AWS Bedrock not available. Install boto3 to enable answer generation: `pip install boto3`")
 
+
+# Helper function to get credentials from secrets or environment
+def get_credential(key: str, default: str = None) -> str:
+    """Get credential from Streamlit secrets or environment variables."""
+    # Try Streamlit secrets first (for cloud deployment)
+    if hasattr(st, 'secrets') and key in st.secrets:
+        return st.secrets[key]
+    # Fall back to environment variables (for local development)
+    return os.getenv(key, default)
+
 # Page configuration
 st.set_page_config(
     page_title="Gram-Vani",
@@ -207,9 +217,9 @@ with col_left:
         
         # Process button
         if st.button("🔍 Process Question", type="primary", use_container_width=True):
-            # Get Bhashini credentials from environment
-            api_key = os.getenv("BHASHINI_API_KEY")
-            user_id = os.getenv("BHASHINI_USER_ID")
+            # Get Bhashini credentials from secrets or environment
+            api_key = get_credential("BHASHINI_API_KEY")
+            user_id = get_credential("BHASHINI_USER_ID")
             
             if not api_key or not user_id:
                 st.error("⚠️ Bhashini credentials not configured. Please set BHASHINI_API_KEY and BHASHINI_USER_ID in your environment.")
