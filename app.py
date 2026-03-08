@@ -181,7 +181,7 @@ def ask_gemini(question: str, context: str, lang_short: str) -> str:
         model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
         response = model.generate_content(prompt)
     except Exception:
-        model = genai.GenerativeModel("gemini-pro")
+        model = genai.GenerativeModel("models/gemini-1.5-pro-latest")
         response = model.generate_content(prompt)
         
     return response.text
