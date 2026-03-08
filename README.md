@@ -148,5 +148,8 @@ pytest tests/ -v
 - **Streamlit** — Rapid UI development
 
 ---
+## 📺 Project Demo
+* **Video Link:** [Watch Gram-Vani Demo](https://drive.google.com/file/d/1P7lRSHaHkxS6JAzDuMTyQoqz-i2OErJK/view?usp=drive_link)
+* **Live Application:** [Gram-Vani on Streamlit](https://gramvani-t5xpqbs5xyxhcezeneohtq.streamlit.app/)
 
 Built with ❤️ for Digital India 🇮🇳 | **Team AI Avenger**
