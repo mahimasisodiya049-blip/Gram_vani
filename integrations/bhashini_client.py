@@ -1,7 +1,7 @@
-"""Bhashini ULCA API client for speech processing.
+"""Bhashini Dhruva API client for speech processing.
 
-This module provides a wrapper for the Bhashini Universal Language Contribution API (ULCA)
-for Speech-to-Text (STT) and Text-to-Speech (TTS) operations in Indian languages.
+This module provides a wrapper for the Bhashini Dhruva inference API
+for Speech-to-Text (STT) and Text-to-Speech (TTS) in Indian languages.
 """
 
 import base64
@@ -32,169 +32,156 @@ class BhashiniClientError(Exception):
 
 
 class BhashiniClient:
-    """Client for interacting with Bhashini ULCA APIs.
-    
-    Bhashini ULCA (Universal Language Contribution API) provides speech processing
-    capabilities for multiple Indian languages.
+    """Client for interacting with Bhashini Dhruva inference APIs.
+
+    Uses the Dhruva pipeline endpoint which is the current production API.
+    Auth: Authorization header with the ULCA API key.
     """
-    
-    # Bhashini ULCA API endpoints
-    ULCA_BASE_URL = "https://meity-auth.ulcacontrib.org"
-    PIPELINE_ENDPOINT = "/ulca/apis/v0/model/getModelsPipeline"
-    COMPUTE_ENDPOINT = "/ulca/apis/asr/v1/recognize"  # STT
-    TTS_COMPUTE_ENDPOINT = "/ulca/apis/tts/v1/generate"  # TTS
-    
+
+    # Current Bhashini Dhruva inference endpoint
+    DHRUVA_BASE_URL = "https://dhruva-api.bhashini.gov.in"
+    PIPELINE_ENDPOINT = "/services/inference/pipeline"
+
+    # Pipeline IDs for different tasks
+    ASR_SERVICE_ID = "ai4bharat/conformer-hi-gpu--t4"   # default Hindi ASR
+    TTS_SERVICE_ID = "ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4"  # Hindi TTS
+
+    # Map from short language code to full BCP-47 tag used by Bhashini
+    LANGUAGE_MAP = {
+        "hi": "hi",
+        "en": "en",
+        "ta": "ta",
+        "te": "te",
+        "bn": "bn",
+        "mr": "mr",
+        "gu": "gu",
+        "kn": "kn",
+        "ml": "ml",
+        "pa": "pa",
+        "or": "or",
+        "as": "as",
+    }
+
     def __init__(self, ulca_api_key: str, ulca_user_id: str):
         """Initialize Bhashini client with credentials.
-        
+
         Args:
-            ulca_api_key: API key for Bhashini ULCA
-            ulca_user_id: User ID for Bhashini ULCA
+            ulca_api_key: API key for Bhashini (used as Authorization token)
+            ulca_user_id: User ID for Bhashini ULCA (kept for compatibility)
         """
         if not ulca_api_key or not ulca_api_key.strip():
             raise ValueError("ulca_api_key cannot be empty")
         if not ulca_user_id or not ulca_user_id.strip():
             raise ValueError("ulca_user_id cannot be empty")
-        
+
         self.api_key = ulca_api_key
         self.user_id = ulca_user_id
         self.session = requests.Session()
+        # Dhruva API uses Authorization header (not ulcaApiKey)
         self.session.headers.update({
             "Content-Type": "application/json",
-            "ulcaApiKey": self.api_key,
-            "userID": self.user_id
+            "Authorization": self.api_key,
+            "userID": self.user_id,
         })
-    
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def speech_to_text(
         self,
         audio: bytes,
         source_language: str,
         audio_format: str = "wav",
-        sample_rate: int = 16000
+        sample_rate: int = 16000,
     ) -> STTResult:
-        """Convert speech to text using Bhashini ULCA STT API.
-        
+        """Convert speech to text using Bhashini Dhruva ASR pipeline.
+
         Args:
             audio: Audio data in bytes
-            source_language: Source language code (e.g., 'hi', 'en', 'ta')
+            source_language: Short language code (e.g. 'hi', 'en', 'ta')
             audio_format: Audio format (default: 'wav')
             sample_rate: Audio sample rate in Hz (default: 16000)
-        
+
         Returns:
-            STTResult containing transcribed text, language, and confidence
-        
+            STTResult with transcribed text, language, and confidence
+
         Raises:
-            BhashiniClientError: If the API call fails
+            BhashiniClientError: If the API call fails or no text returned
         """
         if not audio or len(audio) == 0:
             raise ValueError("audio cannot be empty")
         if not source_language or not source_language.strip():
             raise ValueError("source_language cannot be empty")
-        
-        try:
-            # Step 1: Get pipeline configuration for STT
-            pipeline_config = self._get_stt_pipeline_config(source_language)
-            
-            # Step 2: Encode audio to base64
-            audio_base64 = base64.b64encode(audio).decode('utf-8')
-            
-            # Step 3: Prepare STT request
-            compute_payload = {
-                "pipelineTasks": [
-                    {
-                        "taskType": "asr",
-                        "config": {
-                            "language": {
-                                "sourceLanguage": source_language
-                            },
-                            "serviceId": pipeline_config.get("serviceId"),
-                            "audioFormat": audio_format,
-                            "samplingRate": sample_rate
-                        }
-                    }
-                ],
-                "inputData": {
-                    "audio": [
-                        {
-                            "audioContent": audio_base64
-                        }
-                    ]
+
+        lang = self.LANGUAGE_MAP.get(source_language, source_language)
+        audio_base64 = base64.b64encode(audio).decode("utf-8")
+
+        payload = {
+            "pipelineTasks": [
+                {
+                    "taskType": "asr",
+                    "config": {
+                        "language": {"sourceLanguage": lang},
+                        "audioFormat": audio_format,
+                        "samplingRate": sample_rate,
+                        "postProcessors": ["itn"],
+                    },
                 }
-            }
-            
-            # Step 4: Call compute endpoint
-            compute_url = pipeline_config.get("callbackUrl", self.ULCA_BASE_URL + self.COMPUTE_ENDPOINT)
+            ],
+            "inputData": {
+                "audio": [{"audioContent": audio_base64}]
+            },
+        }
+
+        try:
             response = self.session.post(
-                compute_url,
-                json=compute_payload,
-                timeout=30
+                self.DHRUVA_BASE_URL + self.PIPELINE_ENDPOINT,
+                json=payload,
+                timeout=30,
             )
             response.raise_for_status()
-            
-            # Step 5: Parse response with robust error handling
-            result = response.json()
-            
-            # Validate response structure
-            if "pipelineResponse" not in result:
-                raise BhashiniClientError(f"Invalid response format from Bhashini STT API. Response: {result}")
-            
-            # Handle empty pipelineResponse
-            if not result["pipelineResponse"] or len(result["pipelineResponse"]) == 0:
-                raise BhashiniClientError("Empty pipelineResponse received from Bhashini API")
-            
-            # Extract output with multiple fallback paths
-            pipeline_output = result["pipelineResponse"][0]
-            
-            # Try different possible response structures
-            transcribed_text = None
-            
-            # Path 1: output[0].source
-            if "output" in pipeline_output and pipeline_output["output"]:
-                if len(pipeline_output["output"]) > 0:
-                    transcribed_text = pipeline_output["output"][0].get("source", "")
-            
-            # Path 2: audio[0].source (alternative structure)
-            if not transcribed_text and "audio" in pipeline_output:
-                if pipeline_output["audio"] and len(pipeline_output["audio"]) > 0:
-                    transcribed_text = pipeline_output["audio"][0].get("source", "")
-            
-            # Path 3: Direct source field
-            if not transcribed_text:
-                transcribed_text = pipeline_output.get("source", "")
-            
-            # Validate transcribed text
-            if not transcribed_text or not transcribed_text.strip():
-                raise BhashiniClientError("Empty transcription received from Bhashini API. The audio may be unclear or too quiet.")
-            
-            return STTResult(
-                text=transcribed_text.strip(),
-                language=source_language,
-                confidence=1.0  # ULCA doesn't always provide confidence scores
-            )
-        
+        except requests.HTTPError as e:
+            raise BhashiniClientError(
+                f"Bhashini ASR HTTP {response.status_code}: {response.text[:300]}"
+            ) from e
         except requests.RequestException as e:
-            raise BhashiniClientError(f"STT API request failed: {str(e)}")
-        except (KeyError, IndexError) as e:
-            raise BhashiniClientError(f"Failed to parse STT response: {str(e)}")
-    
+            raise BhashiniClientError(f"STT API request failed: {str(e)}") from e
+
+        result = response.json()
+
+        # --- Parse response ---
+        transcribed_text = self._extract_stt_text(result)
+        if not transcribed_text or not transcribed_text.strip():
+            raise BhashiniClientError(
+                "Empty transcription received from Bhashini API. "
+                "The audio may be unclear or too quiet."
+            )
+
+        return STTResult(
+            text=transcribed_text.strip(),
+            language=source_language,
+            confidence=1.0,
+        )
+
     def text_to_speech(
         self,
         text: str,
         target_language: str,
         gender: str = "female",
-        sample_rate: int = 16000
+        sample_rate: int = 8000,
     ) -> TTSResult:
-        """Convert text to speech using Bhashini ULCA TTS API.
-        
+        """Convert text to speech using Bhashini Dhruva TTS pipeline.
+
         Args:
             text: Text to convert to speech
-            target_language: Target language code (e.g., 'hi', 'en', 'ta')
+            target_language: Short language code (e.g. 'hi', 'en', 'ta')
             gender: Voice gender ('male' or 'female', default: 'female')
-            sample_rate: Audio sample rate in Hz (default: 16000)
-        
+            sample_rate: Audio sample rate in Hz (default: 8000)
+
         Returns:
-            TTSResult containing audio bytes, language, and format
-        
+            TTSResult with audio bytes, language, and format
+
         Raises:
             BhashiniClientError: If the API call fails
         """
@@ -202,180 +189,94 @@ class BhashiniClient:
             raise ValueError("text cannot be empty")
         if not target_language or not target_language.strip():
             raise ValueError("target_language cannot be empty")
-        
-        try:
-            # Step 1: Get pipeline configuration for TTS
-            pipeline_config = self._get_tts_pipeline_config(target_language)
-            
-            # Step 2: Prepare TTS request
-            compute_payload = {
-                "pipelineTasks": [
-                    {
-                        "taskType": "tts",
-                        "config": {
-                            "language": {
-                                "sourceLanguage": target_language
-                            },
-                            "serviceId": pipeline_config.get("serviceId"),
-                            "gender": gender,
-                            "samplingRate": sample_rate
-                        }
-                    }
-                ],
-                "inputData": {
-                    "input": [
-                        {
-                            "source": text
-                        }
-                    ]
+
+        lang = self.LANGUAGE_MAP.get(target_language, target_language)
+
+        payload = {
+            "pipelineTasks": [
+                {
+                    "taskType": "tts",
+                    "config": {
+                        "language": {"sourceLanguage": lang},
+                        "gender": gender,
+                        "samplingRate": sample_rate,
+                    },
                 }
-            }
-            
-            # Step 3: Call compute endpoint
-            compute_url = pipeline_config.get("callbackUrl", self.ULCA_BASE_URL + self.TTS_COMPUTE_ENDPOINT)
+            ],
+            "inputData": {
+                "input": [{"source": text}]
+            },
+        }
+
+        try:
             response = self.session.post(
-                compute_url,
-                json=compute_payload,
-                timeout=30
+                self.DHRUVA_BASE_URL + self.PIPELINE_ENDPOINT,
+                json=payload,
+                timeout=30,
             )
             response.raise_for_status()
-            
-            # Step 4: Parse response
-            result = response.json()
-            
-            if "pipelineResponse" not in result:
-                raise BhashiniClientError("Invalid response format from Bhashini TTS API")
-            
-            output = result["pipelineResponse"][0].get("audio", [{}])[0]
-            audio_base64 = output.get("audioContent", "")
-            
-            if not audio_base64:
-                raise BhashiniClientError("Empty audio received from Bhashini API")
-            
-            # Step 5: Decode base64 audio
-            audio_bytes = base64.b64decode(audio_base64)
-            
-            return TTSResult(
-                audio=audio_bytes,
-                language=target_language,
-                format="wav"
-            )
-        
+        except requests.HTTPError as e:
+            raise BhashiniClientError(
+                f"Bhashini TTS HTTP {response.status_code}: {response.text[:300]}"
+            ) from e
         except requests.RequestException as e:
-            raise BhashiniClientError(f"TTS API request failed: {str(e)}")
-        except (KeyError, IndexError) as e:
-            raise BhashiniClientError(f"Failed to parse TTS response: {str(e)}")
-    
+            raise BhashiniClientError(f"TTS API request failed: {str(e)}") from e
+
+        result = response.json()
+
+        # --- Parse response ---
+        audio_base64 = self._extract_tts_audio(result)
+        if not audio_base64:
+            raise BhashiniClientError("Empty audio received from Bhashini TTS API")
+
+        audio_bytes = base64.b64decode(audio_base64)
+        return TTSResult(audio=audio_bytes, language=target_language, format="wav")
+
     def get_supported_languages(self) -> List[str]:
-        """Get list of supported Indian languages from ULCA.
-        
-        Returns:
-            List of language codes supported by Bhashini
-        """
-        # Common Indian languages supported by Bhashini ULCA
-        return [
-            "hi",  # Hindi
-            "en",  # English
-            "bn",  # Bengali
-            "ta",  # Tamil
-            "te",  # Telugu
-            "mr",  # Marathi
-            "gu",  # Gujarati
-            "kn",  # Kannada
-            "ml",  # Malayalam
-            "pa",  # Punjabi
-            "or",  # Odia
-            "as",  # Assamese
-        ]
-    
-    def _get_stt_pipeline_config(self, language: str) -> Dict[str, Any]:
-        """Get pipeline configuration for STT.
-        
-        Args:
-            language: Language code
-        
-        Returns:
-            Pipeline configuration dictionary
-        
-        Raises:
-            BhashiniClientError: If pipeline configuration fails
-        """
+        """Return list of supported language codes."""
+        return list(self.LANGUAGE_MAP.keys())
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _extract_stt_text(self, result: Dict[str, Any]) -> Optional[str]:
+        """Extract transcribed text from Dhruva pipeline response."""
         try:
-            payload = {
-                "pipelineTasks": [
-                    {
-                        "taskType": "asr",
-                        "config": {
-                            "language": {
-                                "sourceLanguage": language
-                            }
-                        }
-                    }
-                ],
-                "pipelineRequestConfig": {
-                    "pipelineId": "64392f96daac500b55c543cd"
-                }
-            }
-            
-            response = self.session.post(
-                self.ULCA_BASE_URL + self.PIPELINE_ENDPOINT,
-                json=payload,
-                timeout=10
-            )
-            response.raise_for_status()
-            
-            result = response.json()
-            
-            if "pipelineResponseConfig" not in result:
-                raise BhashiniClientError("Invalid pipeline configuration response")
-            
-            return result["pipelineResponseConfig"][0]
-        
-        except requests.RequestException as e:
-            raise BhashiniClientError(f"Failed to get STT pipeline config: {str(e)}")
-    
-    def _get_tts_pipeline_config(self, language: str) -> Dict[str, Any]:
-        """Get pipeline configuration for TTS.
-        
-        Args:
-            language: Language code
-        
-        Returns:
-            Pipeline configuration dictionary
-        
-        Raises:
-            BhashiniClientError: If pipeline configuration fails
-        """
+            pipeline_response = result.get("pipelineResponse", [])
+            if not pipeline_response:
+                return None
+
+            task_output = pipeline_response[0]
+
+            # Path 1: output[0].source  (most common)
+            outputs = task_output.get("output", [])
+            if outputs:
+                return outputs[0].get("source", "")
+
+            # Path 2: audio[0].source
+            audio_items = task_output.get("audio", [])
+            if audio_items:
+                return audio_items[0].get("source", "")
+
+            # Path 3: direct source
+            return task_output.get("source", "")
+
+        except (KeyError, IndexError):
+            return None
+
+    def _extract_tts_audio(self, result: Dict[str, Any]) -> Optional[str]:
+        """Extract base64 audio content from Dhruva pipeline response."""
         try:
-            payload = {
-                "pipelineTasks": [
-                    {
-                        "taskType": "tts",
-                        "config": {
-                            "language": {
-                                "sourceLanguage": language
-                            }
-                        }
-                    }
-                ],
-                "pipelineRequestConfig": {
-                    "pipelineId": "64392f96daac500b55c543cd"
-                }
-            }
-            
-            response = self.session.post(
-                self.ULCA_BASE_URL + self.PIPELINE_ENDPOINT,
-                json=payload,
-                timeout=10
-            )
-            response.raise_for_status()
-            
-            result = response.json()
-            
-            if "pipelineResponseConfig" not in result:
-                raise BhashiniClientError("Invalid pipeline configuration response")
-            
-            return result["pipelineResponseConfig"][0]
-        
-        except requests.RequestException as e:
-            raise BhashiniClientError(f"Failed to get TTS pipeline config: {str(e)}")
+            pipeline_response = result.get("pipelineResponse", [])
+            if not pipeline_response:
+                return None
+
+            audio_list = pipeline_response[0].get("audio", [])
+            if not audio_list:
+                return None
+
+            return audio_list[0].get("audioContent", "")
+
+        except (KeyError, IndexError):
+            return None

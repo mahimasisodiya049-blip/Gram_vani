@@ -35,6 +35,14 @@ class AWSAudioClient:
         'te': {'voice': 'Joanna', 'engine': 'neural'},  # Telugu (fallback to English)
         'bn': {'voice': 'Joanna', 'engine': 'neural'},  # Bengali (fallback to English)
     }
+
+    # Correct Polly LanguageCode for each voice — must match the voice, not the user language
+    POLLY_LANGUAGE_CODES = {
+        'Aditi':  'hi-IN',
+        'Madhav': 'hi-IN',
+        'Joanna': 'en-US',
+        'Raveena': 'en-IN',
+    }
     
     # Language codes for Transcribe
     TRANSCRIBE_LANGUAGES = {
@@ -256,16 +264,18 @@ class AWSAudioClient:
             
             voice_id = voice_config['voice']
             engine = voice_config['engine']
-            
+            # Get the correct Polly LanguageCode for this voice (must match voice, not user language)
+            polly_lang_code = self.POLLY_LANGUAGE_CODES.get(voice_id, 'en-US')
+
             logger.info(f"Synthesizing speech with voice: {voice_id} ({engine})")
-            
+
             # Call Polly
             response = self.polly_client.synthesize_speech(
                 Text=text,
                 OutputFormat='mp3',
                 VoiceId=voice_id,
                 Engine=engine,
-                LanguageCode='hi-IN' if language == 'hi' else 'en-US'
+                LanguageCode=polly_lang_code
             )
             
             # Read audio stream

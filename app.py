@@ -1,346 +1,291 @@
-"""Gram-Vani Streamlit Application.
-
-A voice-first interface for querying government documents.
-Users can upload PDFs and ask questions via voice.
+"""Gram-Vani | AI Avenger — Final Hackathon Submission
+Hybrid RAG: Bhashini STT → PyMuPDF + Gemini 1.5 Flash → Answer in Hindi/Marathi/English
 """
 
+import json
 import streamlit as st
-from audio_recorder_streamlit import audio_recorder
-import time
-import os
-from pathlib import Path
-from integrations import AWS_AVAILABLE
+import google.generativeai as genai
+from streamlit_mic_recorder import speech_to_text
+import pymupdf
 
-# Import AWS components if available
-if AWS_AVAILABLE:
-    from integrations import BedrockClient, RAGEngine, AWSClientError, AWSAudioClient, AWSAudioClientError
-else:
-    st.warning("⚠️ AWS services not available. Install boto3 to enable audio processing and answer generation: `pip install boto3`")
+# ── Gemini setup ───────────────────────────────────────────────────────────────
+genai.configure(api_key=st.secrets["GRAMVANI_GEMINI_KEY"])
+model = genai.GenerativeModel("gemini-1.5-flash")
 
-
-# Helper function to get credentials from secrets or environment
-def get_credential(key: str, default: str = None) -> str:
-    """Get credential from Streamlit secrets or environment variables."""
-    # Try Streamlit secrets first (for cloud deployment)
-    if hasattr(st, 'secrets') and key in st.secrets:
-        return st.secrets[key]
-    # Fall back to environment variables (for local development)
-    return os.getenv(key, default)
-
-# Page configuration
+# ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Gram-Vani",
+    page_title="Gram-Vani | AI Avenger",
     page_icon="🎙️",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+    layout="centered",
+    initial_sidebar_state="expanded",
 )
 
-# Custom CSS for styling
+# ── Custom CSS ─────────────────────────────────────────────────────────────────
 st.markdown("""
-    <style>
-    /* Main container styling */
-    .main {
-        padding: 2rem;
-    }
-    
-    /* Title styling */
-    .title {
-        text-align: center;
-        color: #1f77b4;
-        font-size: 3rem;
-        font-weight: bold;
-        margin-bottom: 0.5rem;
-    }
-    
-    .subtitle {
-        text-align: center;
-        color: #666;
-        font-size: 1.2rem;
-        margin-bottom: 2rem;
-    }
-    
-    /* Record button container */
-    .record-section {
-        text-align: center;
-        padding: 3rem 2rem;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        border-radius: 20px;
-        margin-bottom: 2rem;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-    }
-    
-    .record-title {
-        color: white;
-        font-size: 1.8rem;
-        font-weight: 600;
-        margin-bottom: 1rem;
-    }
-    
-    .record-subtitle {
-        color: rgba(255,255,255,0.9);
-        font-size: 1rem;
-        margin-bottom: 1.5rem;
-    }
-    
-    /* Upload section styling */
-    .upload-section {
-        padding: 2rem;
-        background: #f8f9fa;
-        border-radius: 15px;
-        border: 2px dashed #ccc;
-        text-align: center;
-    }
-    
-    .upload-title {
-        color: #333;
-        font-size: 1.5rem;
-        font-weight: 600;
-        margin-bottom: 1rem;
-    }
-    
-    /* Status messages */
-    .status-success {
-        padding: 1rem;
-        background: #d4edda;
-        border: 1px solid #c3e6cb;
-        border-radius: 8px;
-        color: #155724;
-        margin: 1rem 0;
-    }
-    
-    .status-info {
-        padding: 1rem;
-        background: #d1ecf1;
-        border: 1px solid #bee5eb;
-        border-radius: 8px;
-        color: #0c5460;
-        margin: 1rem 0;
-    }
-    
-    /* Language selector */
-    .language-section {
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    
-    /* Divider */
-    .divider {
-        height: 2px;
-        background: linear-gradient(to right, transparent, #ddd, transparent);
-        margin: 2rem 0;
-    }
-    
-    /* Hide Streamlit branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    </style>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+
+.brand-header {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    color: white;
+    padding: 1.5rem 2rem;
+    border-radius: 16px;
+    margin-bottom: 1.5rem;
+    text-align: center;
+}
+.brand-header h1 { font-size: 2.4rem; margin: 0; font-weight: 700; }
+.brand-header p  { margin: 0.3rem 0 0; color: #a8c8ff; font-size: 1rem; }
+.brand-badge {
+    display: inline-block;
+    background: #e63946;
+    color: white;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.2rem 0.7rem;
+    border-radius: 20px;
+    margin-top: 0.5rem;
+    letter-spacing: 0.05em;
+}
+.answer-box {
+    background: linear-gradient(135deg, #e8f5e9, #f1f8e9);
+    border-left: 5px solid #43a047;
+    border-radius: 10px;
+    padding: 1.3rem 1.6rem;
+    margin-top: 1rem;
+    font-size: 1.05rem;
+    line-height: 1.8;
+    color: #1b5e20;
+}
+.question-box {
+    background: #ede7f6;
+    border-left: 5px solid #7e57c2;
+    border-radius: 10px;
+    padding: 1rem 1.5rem;
+    margin: 1rem 0;
+    color: #311b92;
+    font-style: italic;
+}
+.source-box {
+    background: #fff8e1;
+    border-left: 4px solid #ffa000;
+    border-radius: 8px;
+    padding: 0.7rem 1.2rem;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+    color: #5d4037;
+}
+#MainMenu, footer { visibility: hidden; }
+</style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-if 'uploaded_files' not in st.session_state:
-    st.session_state.uploaded_files = []
-if 'recording_state' not in st.session_state:
-    st.session_state.recording_state = 'idle'
-if 'selected_language' not in st.session_state:
-    st.session_state.selected_language = 'Hindi'
-if 'transcribed_text' not in st.session_state:
-    st.session_state.transcribed_text = None
-if 'audio_data' not in st.session_state:
-    st.session_state.audio_data = None
-if 'processing_error' not in st.session_state:
-    st.session_state.processing_error = None
+# ── Brand header ───────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="brand-header">
+  <h1>🎙️ Gram-Vani</h1>
+  <p>सरकारी योजनाओं की जानकारी — आपकी भाषा में</p>
+  <span class="brand-badge">⚡ AI Avenger &nbsp;|&nbsp; AI for Bharat Hackathon</span>
+</div>
+""", unsafe_allow_html=True)
 
-# Header
-st.markdown('<div class="title">🎙️ Gram-Vani</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">सरकारी दस्तावेज़ों को आवाज़ से समझें | Understand Government Documents with Voice</div>', unsafe_allow_html=True)
-
-# Language selection
-st.markdown('<div class="language-section">', unsafe_allow_html=True)
-col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
-    language = st.selectbox(
-        "🌐 Select Language / भाषा चुनें",
-        options=['Hindi', 'English', 'Tamil', 'Telugu', 'Bengali', 'Marathi', 'Gujarati', 'Kannada'],
+# ── Sidebar ────────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## ⚙️ Settings")
+    lang_display = st.selectbox(
+        "🌐 Language / भाषा",
+        options=["Hindi", "Marathi", "English"],
         index=0,
-        key='language_selector'
     )
-    st.session_state.selected_language = language
-st.markdown('</div>', unsafe_allow_html=True)
-
-# Main layout - Two columns
-col_left, col_right = st.columns([1, 1], gap="large")
-
-# Left Column - Voice Recording
-with col_left:
-    st.markdown("""
-        <div class="record-section">
-            <div class="record-title">🎤 Ask Your Question</div>
-            <div class="record-subtitle">Click the microphone to record your question</div>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    # Language code mapping
-    language_codes = {
-        'Hindi': 'hi',
-        'English': 'en',
-        'Tamil': 'ta',
-        'Telugu': 'te',
-        'Bengali': 'bn',
-        'Marathi': 'mr',
-        'Gujarati': 'gu',
-        'Kannada': 'kn'
+    LANG_MAP = {
+        "Hindi":   {"web_code": "hi-IN", "short": "hi",  "label": "हिंदी"},
+        "Marathi": {"web_code": "mr-IN", "short": "mr",  "label": "मराठी"},
+        "English": {"web_code": "en-US", "short": "en",  "label": "English"},
     }
-    
-    # Audio recorder
-    audio_bytes = audio_recorder(
-        text="Click to Record",
-        recording_color="#e74c3c",
-        neutral_color="#3498db",
-        icon_name="microphone",
-        icon_size="6x",
-        pause_threshold=2.0,
-        sample_rate=16000
-    )
-    
-    # Store audio in session state when recorded
-    if audio_bytes and audio_bytes != st.session_state.audio_data:
-        st.session_state.audio_data = audio_bytes
-        st.session_state.transcribed_text = None  # Reset transcription
-        st.session_state.processing_error = None
-    
-    if st.session_state.audio_data:
-        st.success("✅ Audio recorded successfully!")
-        
-        # Display audio player
-        st.audio(st.session_state.audio_data, format="audio/wav")
-        
-        # Process button
-        if st.button("🔍 Process Question", type="primary", use_container_width=True):
-            if not AWS_AVAILABLE:
-                st.error("⚠️ AWS services not available. Please install boto3: `pip install boto3`")
-            else:
-                with st.spinner("🎤 AI Avenger is listening..."):
-                    try:
-                        # Initialize AWS Audio client
-                        aws_region = get_credential("AWS_REGION", "us-east-1")
-                        audio_client = AWSAudioClient(region_name=aws_region)
-                        
-                        # Get language code
-                        lang_code = language_codes.get(st.session_state.selected_language, 'hi')
-                        
-                        # Call Transcribe STT
-                        result = audio_client.speech_to_text(
-                            audio=st.session_state.audio_data,
-                            language=lang_code,
-                            audio_format="wav"
-                        )
-                        
-                        # Store transcribed text in session state
-                        if result and result.get('text'):
-                            st.session_state.transcribed_text = result['text']
-                            st.session_state.processing_error = None
-                        else:
-                            st.session_state.processing_error = "No text was transcribed. Please try speaking more clearly."
-                    
-                    except AWSAudioClientError as e:
-                        st.session_state.processing_error = f"AWS Audio Error: {str(e)}"
-                    except ValueError as e:
-                        st.session_state.processing_error = f"Validation Error: {str(e)}"
-                    except Exception as e:
-                        st.session_state.processing_error = f"Unexpected Error: {str(e)}"
-        
-        # Display transcribed text if available
-        if st.session_state.transcribed_text:
-            st.success("🎯 **Transcribed Question:**")
-            st.info(st.session_state.transcribed_text)
-            
-            # Placeholder for answer generation
-            st.markdown("""
-                <div class="status-info">
-                    <strong>📝 Answer:</strong><br>
-                    Your answer will appear here based on the uploaded documents.
-                    (RAG pipeline integration coming soon)
-                </div>
-            """, unsafe_allow_html=True)
-        
-        # Display error if any
-        if st.session_state.processing_error:
-            st.error(f"❌ {st.session_state.processing_error}")
-            st.info("💡 **Troubleshooting Tips:**\n- Ensure your microphone is working\n- Speak clearly and loudly\n- Check your internet connection\n- Verify Bhashini API credentials")
-    
-    # Instructions
+    lang = LANG_MAP[lang_display]
+
     st.markdown("---")
+    st.markdown("**🏗️ Architecture**")
     st.markdown("""
-        ### 📋 How to Use:
-        1. **Upload** government PDF documents (right side)
-        2. **Select** your preferred language
-        3. **Click** the microphone and ask your question
-        4. **Listen** to the simplified answer
+- 🎤 **Bhashini** Web STT
+- 📄 **PyMuPDF** PDF parser
+- 🤖 **Gemini 1.5 Flash** RAG
+- ☁️ AWS S3 / Lambda *(planned)*
     """)
-
-# Right Column - PDF Upload
-with col_right:
-    st.markdown("""
-        <div class="upload-section">
-            <div class="upload-title">📄 Upload Government Documents</div>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    # File uploader
-    uploaded_files = st.file_uploader(
-        "Drop PDF files here or click to browse",
-        type=['pdf'],
-        accept_multiple_files=True,
-        key='pdf_uploader',
-        help="Upload government documents in PDF format"
-    )
-    
-    if uploaded_files:
-        st.success(f"✅ {len(uploaded_files)} file(s) uploaded successfully!")
-        
-        # Display uploaded files
-        st.markdown("### 📚 Uploaded Documents:")
-        for idx, file in enumerate(uploaded_files, 1):
-            col_a, col_b, col_c = st.columns([3, 1, 1])
-            with col_a:
-                st.write(f"{idx}. {file.name}")
-            with col_b:
-                st.write(f"{file.size / 1024:.1f} KB")
-            with col_c:
-                if st.button("🗑️", key=f"delete_{idx}"):
-                    st.info("File removed")
-        
-        # Process documents button
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("📤 Process Documents", type="primary", use_container_width=True):
-            with st.spinner("Processing documents..."):
-                progress_bar = st.progress(0)
-                for i in range(100):
-                    time.sleep(0.01)
-                    progress_bar.progress(i + 1)
-                
-                st.success("✅ Documents processed and indexed successfully!")
-                st.balloons()
-    else:
-        st.info("👆 Upload PDF documents to get started")
-    
-    # Document stats
     st.markdown("---")
-    st.markdown("### 📊 Document Statistics")
-    
-    stat_col1, stat_col2, stat_col3 = st.columns(3)
-    with stat_col1:
-        st.metric("Documents", len(uploaded_files) if uploaded_files else 0)
-    with stat_col2:
-        st.metric("Pages", "0")
-    with stat_col3:
-        st.metric("Indexed", "0")
+    st.markdown("**📋 How to use:**")
+    st.markdown("1. Upload a govt PDF")
+    st.markdown("2. Speak or type your question")
+    st.markdown("3. Get answer in your language")
 
-# Footer
-st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-st.markdown("""
-    <div style="text-align: center; color: #666; padding: 1rem;">
-        <p>🇮🇳 Built for Digital India | Making Government Information Accessible</p>
-        <p style="font-size: 0.9rem;">Powered by AWS Transcribe, Polly & Bedrock</p>
-    </div>
-""", unsafe_allow_html=True)
+# ── Session state ──────────────────────────────────────────────────────────────
+if "pdf_text" not in st.session_state:
+    st.session_state.pdf_text = ""
+if "pdf_name" not in st.session_state:
+    st.session_state.pdf_name = ""
+if "last_question" not in st.session_state:
+    st.session_state.last_question = ""
+if "last_answer" not in st.session_state:
+    st.session_state.last_answer = ""
+
+# ── PDF Upload & Extraction ────────────────────────────────────────────────────
+st.markdown("### 📄 Step 1: Upload a Government Scheme PDF")
+uploaded_file = st.file_uploader(
+    "Upload a PDF (PM-Kisan, APY, PMAY, etc.)",
+    type="pdf",
+    help="The text from this document will be used as context for your questions.",
+)
+
+def extract_text_from_pdf(file) -> str:
+    doc = pymupdf.open(stream=file.read(), filetype="pdf")
+    return "\n".join(page.get_text() for page in doc)
+
+if uploaded_file:
+    # Re-extract only when a new file is uploaded
+    if uploaded_file.name != st.session_state.pdf_name:
+        with st.spinner("📖 Reading document…"):
+            st.session_state.pdf_text = extract_text_from_pdf(uploaded_file)
+            st.session_state.pdf_name = uploaded_file.name
+            st.session_state.last_question = ""
+            st.session_state.last_answer = ""
+        st.success(f"✅ **{uploaded_file.name}** loaded — {len(st.session_state.pdf_text):,} characters extracted.")
+    else:
+        st.success(f"✅ **{uploaded_file.name}** ready.")
+else:
+    st.info("👆 Upload a PDF to get started. You can still ask general questions without one.")
+
+# ── Gemini RAG ─────────────────────────────────────────────────────────────────
+SYSTEM_PROMPTS = {
+    "hi": (
+        "आप 'Gram-Vani' हैं — AI Avenger टीम द्वारा बनाया गया एक सहायक, जो ग्रामीण "
+        "भारतीय नागरिकों को सरकारी योजनाओं को समझने में मदद करता है। "
+        "दिए गए संदर्भ के आधार पर सरल और स्पष्ट हिंदी में उत्तर दें। "
+        "यदि उत्तर संदर्भ में नहीं है, तो विनम्रता से बताएं।"
+    ),
+    "mr": (
+        "तुम्ही 'Gram-Vani' आहात — AI Avenger टीमने तयार केलेले सहाय्यक, जे ग्रामीण "
+        "भारतीय नागरिकांना सरकारी योजना समजण्यास मदत करते. "
+        "दिलेल्या संदर्भावर आधारित सोप्या मराठीत उत्तर द्या. "
+        "संदर्भात उत्तर नसल्यास, नम्रपणे सांगा."
+    ),
+    "en": (
+        "You are 'Gram-Vani', a helpful assistant by Team AI Avenger, designed to help "
+        "rural Indian citizens understand government schemes. Answer clearly and simply "
+        "based on the provided context. If the answer is not in the context, say so politely."
+    ),
+}
+
+def ask_gemini(question: str, context: str, lang_short: str) -> str:
+    system = SYSTEM_PROMPTS.get(lang_short, SYSTEM_PROMPTS["en"])
+    if context.strip():
+        prompt = (
+            f"{system}\n\n"
+            f"--- Document Context ---\n{context[:12000]}\n--- End Context ---\n\n"
+            f"Question: {question}\n\n"
+            f"Respond ONLY in {lang_display}."
+        )
+    else:
+        prompt = (
+            f"{system}\n\n"
+            f"No document was uploaded. Answer from general knowledge.\n\n"
+            f"Question: {question}\n\n"
+            f"Respond ONLY in {lang_display}."
+        )
+    response = model.generate_content(prompt)
+    return response.text
+
+# ── Voice + Text Input ─────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown(f"### 🎤 Step 2: Ask Your Question in **{lang['label']}**")
+
+col_voice, col_type = st.columns([1, 1], gap="medium")
+
+with col_voice:
+    st.markdown("**🎙️ Speak (via Bhashini Web STT):**")
+    try:
+        from streamlit_mic_recorder import speech_to_text as _stt
+        spoken = _stt(
+            language=lang["web_code"],
+            start_prompt="⏺️ Start Speaking",
+            stop_prompt="⏹️ Stop & Process",
+            just_once=True,
+            use_container_width=True,
+            key=f"stt_{lang_display}",
+        )
+    except ImportError:
+        st.warning("`streamlit-mic-recorder` not found. Run `pip install streamlit-mic-recorder`.")
+        spoken = None
+    st.caption("Works best in Chrome / Edge. Allow microphone when prompted.")
+
+with col_type:
+    st.markdown("**⌨️ Or Type your question:**")
+    typed = st.text_area(
+        "Type here…",
+        placeholder="e.g. PM Kisan में कितनी राशि मिलती है?",
+        height=120,
+        label_visibility="collapsed",
+    )
+    submit = st.button("🔍 Get Answer", use_container_width=True, type="primary")
+
+# Determine active question
+question = ""
+if spoken and spoken.strip():
+    question = spoken.strip()
+elif submit and typed.strip():
+    question = typed.strip()
+
+# ── Process & Display ──────────────────────────────────────────────────────────
+if question and question != st.session_state.last_question:
+    st.session_state.last_question = question
+    st.session_state.last_answer = ""
+
+    st.markdown(
+        f'<div class="question-box">🗣️ <strong>You asked:</strong> {question}</div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.spinner("🤖 Gram-Vani is thinking…"):
+        try:
+            answer = ask_gemini(question, st.session_state.pdf_text, lang["short"])
+            st.session_state.last_answer = answer
+        except Exception as e:
+            err = str(e)
+            if "API_KEY" in err.upper() or "api key" in err.lower():
+                st.error("🔑 **API Key Error** — Open `.streamlit/secrets.toml` and set `GRAMVANI_GEMINI_KEY`.")
+            else:
+                st.error(f"❌ Gemini Error: {err}")
+            st.stop()
+
+elif question and question == st.session_state.last_question:
+    st.markdown(
+        f'<div class="question-box">🗣️ <strong>You asked:</strong> {question}</div>',
+        unsafe_allow_html=True,
+    )
+
+# Always render the last answer
+if st.session_state.last_answer:
+    st.markdown(
+        f'<div class="answer-box">📢 <strong>Gram-Vani responds:</strong><br><br>'
+        f'{st.session_state.last_answer}</div>',
+        unsafe_allow_html=True,
+    )
+    if st.session_state.pdf_name:
+        st.markdown(
+            f'<div class="source-box">📄 Source document: <strong>{st.session_state.pdf_name}</strong></div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown("")
+    if st.button("🔄 Ask another question", use_container_width=True):
+        st.session_state.last_question = ""
+        st.session_state.last_answer = ""
+        st.rerun()
+
+# ── Footer ─────────────────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown(
+    "<div style='text-align:center;color:#999;font-size:0.82rem'>"
+    "🇮🇳 <strong>Gram-Vani</strong> &nbsp;|&nbsp; Team AI Avenger &nbsp;|&nbsp; "
+    "AI for Bharat Hackathon &nbsp;|&nbsp; "
+    "Hybrid RAG: Bhashini STT × Gemini 1.5 Flash × PyMuPDF"
+    "</div>",
+    unsafe_allow_html=True,
+)

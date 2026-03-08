@@ -1,371 +1,264 @@
-"""Gram-Vani Streamlit Application - Improved Version.
-
-A voice-first interface for querying government documents.
-Features: STT → RAG → Bedrock → TTS with loading spinners and chat UI.
+"""Gram-Vani — Emergency Prototype
+Browser-native STT → Bedrock Claude 3.5 Sonnet → Text answer
+No Bhashini keys needed. No WebSocket. Works out of the box.
 """
 
+import json
 import streamlit as st
-from audio_recorder_streamlit import audio_recorder
-import time
-import os
-from pathlib import Path
-from integrations import AWS_AVAILABLE
+import boto3
+from botocore.exceptions import ClientError, NoCredentialsError
 
-# Import AWS components if available
-if AWS_AVAILABLE:
-    from integrations import BedrockClient, RAGEngine, AWSClientError, AWSAudioClient, AWSAudioClientError
-else:
-    st.warning("⚠️ AWS services not available. Install boto3 to enable audio processing and answer generation: `pip install boto3`")
-
-# Page configuration
+# ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Gram-Vani - AI Avenger",
+    page_title="Gram-Vani | AI Avenger",
     page_icon="🎙️",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+    layout="centered",
+    initial_sidebar_state="expanded",
 )
 
-# Custom CSS for styling
+# ── Minimal, clean CSS ─────────────────────────────────────────────────────────
 st.markdown("""
-    <style>
-    /* Main container styling */
-    .main {
-        padding: 2rem;
-    }
-    
-    /* Title styling */
-    .title {
-        text-align: center;
-        color: #1f77b4;
-        font-size: 3rem;
-        font-weight: bold;
-        margin-bottom: 0.5rem;
-    }
-    
-    .subtitle {
-        text-align: center;
-        color: #666;
-        font-size: 1.2rem;
-        margin-bottom: 2rem;
-    }
-    
-    /* Record button container */
-    .record-section {
-        text-align: center;
-        padding: 3rem 2rem;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        border-radius: 20px;
-        margin-bottom: 2rem;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-    }
-    
-    .record-title {
-        color: white;
-        font-size: 1.8rem;
-        font-weight: 600;
-        margin-bottom: 1rem;
-    }
-    
-    .record-subtitle {
-        color: rgba(255,255,255,0.9);
-        font-size: 1rem;
-        margin-bottom: 1.5rem;
-    }
-    
-    /* Upload section styling */
-    .upload-section {
-        padding: 2rem;
-        background: #f8f9fa;
-        border-radius: 15px;
-        border: 2px dashed #ccc;
-        text-align: center;
-    }
-    
-    .upload-title {
-        color: #333;
-        font-size: 1.5rem;
-        font-weight: 600;
-        margin-bottom: 1rem;
-    }
-    
-    /* Language selector */
-    .language-section {
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    
-    /* Divider */
-    .divider {
-        height: 2px;
-        background: linear-gradient(to right, transparent, #ddd, transparent);
-        margin: 2rem 0;
-    }
-    
-    /* Hide Streamlit branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    </style>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+.hero {
+    text-align: center;
+    padding: 2rem 1rem 1rem;
+}
+.hero h1 { font-size: 2.6rem; font-weight: 700; color: #1a1a2e; margin-bottom: 0.2rem; }
+.hero p  { color: #555; font-size: 1.05rem; }
+.answer-box {
+    background: linear-gradient(135deg, #e8f5e9 0%, #f1f8e9 100%);
+    border-left: 5px solid #43a047;
+    border-radius: 10px;
+    padding: 1.2rem 1.5rem;
+    margin-top: 1rem;
+    font-size: 1.05rem;
+    line-height: 1.7;
+    color: #1b5e20;
+}
+.question-box {
+    background: #ede7f6;
+    border-left: 5px solid #7e57c2;
+    border-radius: 10px;
+    padding: 1rem 1.5rem;
+    margin-top: 1rem;
+    color: #311b92;
+    font-style: italic;
+}
+#MainMenu, footer { visibility: hidden; }
+</style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-if 'uploaded_files' not in st.session_state:
-    st.session_state.uploaded_files = []
-if 'recording_state' not in st.session_state:
-    st.session_state.recording_state = 'idle'
-if 'selected_language' not in st.session_state:
-    st.session_state.selected_language = 'Hindi'
-if 'transcribed_text' not in st.session_state:
-    st.session_state.transcribed_text = None
-if 'audio_data' not in st.session_state:
-    st.session_state.audio_data = None
-if 'processing_error' not in st.session_state:
-    st.session_state.processing_error = None
-if 'generated_answer' not in st.session_state:
-    st.session_state.generated_answer = None
-if 'answer_audio' not in st.session_state:
-    st.session_state.answer_audio = None
-if 'processing_stage' not in st.session_state:
-    st.session_state.processing_stage = None
-
-# Header
-st.markdown('<div class="title">🎙️ Gram-Vani - AI Avenger</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">सरकारी दस्तावेज़ों को आवाज़ से समझें | Understand Government Documents with Voice</div>', unsafe_allow_html=True)
-
-# Language selection
-st.markdown('<div class="language-section">', unsafe_allow_html=True)
-col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
-    language = st.selectbox(
-        "🌐 Select Language / भाषा चुनें",
-        options=['Hindi', 'English', 'Tamil', 'Telugu', 'Bengali', 'Marathi', 'Gujarati', 'Kannada'],
+# ── Sidebar — Language selector ────────────────────────────────────────────────
+with st.sidebar:
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/4/41/Flag_of_India.svg/320px-Flag_of_India.svg.png", width=120)
+    st.markdown("## ⚙️ Settings")
+    lang_display = st.selectbox(
+        "🌐 Language / भाषा / भाषा",
+        options=["Hindi", "Marathi", "English"],
         index=0,
-        key='language_selector'
     )
-    st.session_state.selected_language = language
-st.markdown('</div>', unsafe_allow_html=True)
+    LANG_MAP = {
+        "Hindi":   {"code": "hi-IN", "short": "hi",  "label": "हिंदी"},
+        "Marathi": {"code": "mr-IN", "short": "mr",  "label": "मराठी"},
+        "English": {"code": "en-US", "short": "en",  "label": "English"},
+    }
+    lang = LANG_MAP[lang_display]
 
-# Language code mapping
-language_codes = {
-    'Hindi': 'hi',
-    'English': 'en',
-    'Tamil': 'ta',
-    'Telugu': 'te',
-    'Bengali': 'bn',
-    'Marathi': 'mr',
-    'Gujarati': 'gu',
-    'Kannada': 'kn'
+    st.markdown("---")
+    st.markdown("**How it works:**")
+    st.markdown("1. 🎤 Click **Start** and speak your question")
+    st.markdown("2. 🤖 AI Avenger reads & answers")
+    st.markdown("3. 📖 Answer appears below in your language")
+
+# ── Hero header ────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="hero">
+  <h1>🎙️ Gram-Vani</h1>
+  <p>सरकारी जानकारी अब आपकी भाषा में &nbsp;|&nbsp; Government info in your language</p>
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown("---")
+
+# ── Browser-native Speech-to-Text ─────────────────────────────────────────────
+try:
+    from streamlit_mic_recorder import speech_to_text
+    MIC_AVAILABLE = True
+except ImportError:
+    MIC_AVAILABLE = False
+
+# Session state
+if "last_question" not in st.session_state:
+    st.session_state.last_question = ""
+if "last_answer" not in st.session_state:
+    st.session_state.last_answer = ""
+
+# ── Bedrock helper ─────────────────────────────────────────────────────────────
+def get_bedrock_client():
+    """Build a Bedrock runtime client from st.secrets (or env vars as fallback)."""
+    try:
+        key_id     = st.secrets.get("AWS_ACCESS_KEY_ID", "")
+        secret_key = st.secrets.get("AWS_SECRET_ACCESS_KEY", "")
+        region     = st.secrets.get("AWS_REGION", "us-east-1")
+    except Exception:
+        import os
+        key_id     = os.getenv("AWS_ACCESS_KEY_ID", "")
+        secret_key = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+        region     = os.getenv("AWS_REGION", "us-east-1")
+
+    if not key_id or key_id.startswith("your-"):
+        raise ValueError(
+            "AWS credentials not set. Open `.streamlit/secrets.toml` and fill in "
+            "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY."
+        )
+
+    return boto3.client(
+        "bedrock-runtime",
+        region_name=region,
+        aws_access_key_id=key_id,
+        aws_secret_access_key=secret_key,
+    )
+
+
+SYSTEM_PROMPTS = {
+    "hi": (
+        "आप एक सहायक हैं जो भारत सरकार की योजनाओं और दस्तावेज़ों के बारे में "
+        "सरल हिंदी में जानकारी देते हैं। संक्षिप्त, स्पष्ट और उपयोगी उत्तर दें। "
+        "उत्तर हमेशा हिंदी में ही दें।"
+    ),
+    "mr": (
+        "तुम्ही एक सहाय्यक आहात जो भारत सरकारच्या योजना आणि दस्तऐवजांबद्दल "
+        "सोप्या मराठीत माहिती देतो. संक्षिप्त, स्पष्ट आणि उपयुक्त उत्तर द्या. "
+        "उत्तर नेहमी मराठीत द्या."
+    ),
+    "en": (
+        "You are a helpful assistant that explains Indian government schemes and "
+        "documents in simple English. Give concise, clear, and useful answers."
+    ),
 }
 
-# Main layout - Two columns
-col_left, col_right = st.columns([1, 1], gap="large")
 
-# Left Column - Voice Recording
-with col_left:
-    st.markdown("""
-        <div class="record-section">
-            <div class="record-title">🎤 Ask Your Question</div>
-            <div class="record-subtitle">Click the microphone to record your question</div>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    # Audio recorder
-    audio_bytes = audio_recorder(
-        text="Click to Record",
-        recording_color="#e74c3c",
-        neutral_color="#3498db",
-        icon_name="microphone",
-        icon_size="6x",
-        pause_threshold=2.0,
-        sample_rate=16000
-    )
-    
-    # Store audio in session state when recorded
-    if audio_bytes and audio_bytes != st.session_state.audio_data:
-        st.session_state.audio_data = audio_bytes
-        st.session_state.transcribed_text = None
-        st.session_state.generated_answer = None
-        st.session_state.answer_audio = None
-        st.session_state.processing_error = None
-        st.session_state.processing_stage = None
-    
-    if st.session_state.audio_data:
-        st.success("✅ Audio recorded successfully!")
-        
-        # Display audio player
-        st.audio(st.session_state.audio_data, format="audio/wav")
-        
-        # Process button
-        if st.button("🔍 Process Question", type="primary", use_container_width=True):
-            if not AWS_AVAILABLE:
-                st.error("⚠️ AWS services not available. Please install boto3: `pip install boto3`")
-            else:
-                lang_code = language_codes.get(st.session_state.selected_language, 'hi')
-                aws_region = os.getenv("AWS_REGION", "us-east-1")
-                
-                # Initialize AWS clients
-                audio_client = AWSAudioClient(region_name=aws_region)
-                bedrock_client = BedrockClient(region_name=aws_region)
-                rag_engine = RAGEngine(bedrock_client=bedrock_client)
-                
-                # Stage 1: Speech-to-Text
-                with st.spinner("🎤 AI Avenger is listening..."):
-                    st.session_state.processing_stage = "transcribing"
-                    try:
-                        stt_result = audio_client.speech_to_text(
-                            audio=st.session_state.audio_data,
-                            language=lang_code,
-                            audio_format="wav"
-                        )
-                        
-                        if stt_result and stt_result.get('text'):
-                            st.session_state.transcribed_text = stt_result['text']
-                            st.session_state.processing_error = None
-                        else:
-                            st.session_state.processing_error = "No text transcribed. Please speak more clearly."
-                            st.session_state.processing_stage = None
-                    
-                    except (AWSAudioClientError, ValueError, Exception) as e:
-                        st.session_state.processing_error = f"Transcription Error: {str(e)}"
-                        st.session_state.processing_stage = None
-                
-                # Stage 2: Generate Answer
-                if st.session_state.transcribed_text and not st.session_state.processing_error:
-                    with st.spinner("🤖 AI Avenger is thinking..."):
-                        st.session_state.processing_stage = "generating"
-                        try:
-                            context = rag_engine.retrieve_context(st.session_state.transcribed_text)
-                            
-                            answer = rag_engine.generate_answer(
-                                question=st.session_state.transcribed_text,
-                                context=context,
-                                language=lang_code
-                            )
-                            
-                            st.session_state.generated_answer = answer
-                        
-                        except AWSClientError as e:
-                            st.warning(f"⚠️ AWS Error: {str(e)}")
-                            st.session_state.generated_answer = rag_engine._get_fallback_message(lang_code)
-                        
-                        except Exception as e:
-                            st.error(f"❌ Generation Error: {str(e)}")
-                            st.session_state.generated_answer = rag_engine._get_fallback_message(lang_code)
-                    
-                    # Stage 3: Text-to-Speech
-                    if st.session_state.generated_answer:
-                        with st.spinner("🔊 AI Avenger is speaking..."):
-                            st.session_state.processing_stage = "synthesizing"
-                            try:
-                                tts_audio = audio_client.text_to_speech(
-                                    text=st.session_state.generated_answer,
-                                    language=lang_code,
-                                    gender="female"
-                                )
-                                
-                                st.session_state.answer_audio = tts_audio
-                            
-                            except (AWSAudioClientError, Exception) as e:
-                                st.warning(f"⚠️ TTS Error: {str(e)}. Showing text only.")
-                                st.session_state.answer_audio = None
-                        
-                        st.session_state.processing_stage = "complete"
-        
-        # Display conversation in chat format
-        if st.session_state.transcribed_text:
-            st.markdown("---")
-            st.markdown("### 💬 Conversation")
-            
-            # User question
-            with st.chat_message("user", avatar="🗣️"):
-                st.markdown("**You asked:**")
-                st.markdown(st.session_state.transcribed_text)
-            
-            # AI answer
-            if st.session_state.generated_answer:
-                with st.chat_message("assistant", avatar="🤖"):
-                    st.markdown("**AI Avenger:**")
-                    st.markdown(st.session_state.generated_answer)
-                    
-                    # Auto-play audio response
-                    if st.session_state.answer_audio:
-                        st.audio(st.session_state.answer_audio, format="audio/mp3", autoplay=True)
-                        st.caption("🔊 Audio response playing automatically")
-        
-        # Display error
-        if st.session_state.processing_error:
-            st.error(f"❌ {st.session_state.processing_error}")
-            st.info("💡 **Tips:** Check microphone, speak clearly, verify credentials")
-    
-    # Instructions
-    st.markdown("---")
-    st.markdown("""
-        ### 📋 How to Use:
-        1. **Upload** government PDF documents (right side)
-        2. **Select** your preferred language
-        3. **Click** the microphone and ask your question
-        4. **Listen** to the AI Avenger's answer
-    """)
+def ask_bedrock(question: str, lang_short: str) -> str:
+    """Send question to Claude 3.5 Sonnet and return the answer text."""
+    client = get_bedrock_client()
+    system_prompt = SYSTEM_PROMPTS.get(lang_short, SYSTEM_PROMPTS["en"])
 
-# Right Column - PDF Upload
-with col_right:
-    st.markdown("""
-        <div class="upload-section">
-            <div class="upload-title">📄 Upload Government Documents</div>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    uploaded_files = st.file_uploader(
-        "Drop PDF files here or click to browse",
-        type=['pdf'],
-        accept_multiple_files=True,
-        key='pdf_uploader',
-        help="Upload government documents in PDF format"
+    body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 1024,
+        "temperature": 0.3,
+        "system": system_prompt,
+        "messages": [
+            {"role": "user", "content": question}
+        ],
+    }
+
+    response = client.invoke_model(
+        modelId="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        contentType="application/json",
+        accept="application/json",
+        body=json.dumps(body),
     )
-    
-    if uploaded_files:
-        st.success(f"✅ {len(uploaded_files)} file(s) uploaded!")
-        
-        st.markdown("### 📚 Uploaded Documents:")
-        for idx, file in enumerate(uploaded_files, 1):
-            col_a, col_b, col_c = st.columns([3, 1, 1])
-            with col_a:
-                st.write(f"{idx}. {file.name}")
-            with col_b:
-                st.write(f"{file.size / 1024:.1f} KB")
-            with col_c:
-                if st.button("🗑️", key=f"delete_{idx}"):
-                    st.info("File removed")
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("📤 Process Documents", type="primary", use_container_width=True):
-            with st.spinner("Processing documents..."):
-                progress_bar = st.progress(0)
-                for i in range(100):
-                    time.sleep(0.01)
-                    progress_bar.progress(i + 1)
-                
-                st.success("✅ Documents processed!")
-                st.balloons()
+    result = json.loads(response["body"].read())
+    return result["content"][0]["text"]
+
+
+# ── Main interaction area ──────────────────────────────────────────────────────
+st.subheader(f"🎤 Ask in {lang['label']}")
+st.caption(f"Browser will use your microphone — make sure to allow access. Speaking in **{lang_display}**.")
+
+col_voice, col_text = st.columns([1, 1], gap="medium")
+
+with col_voice:
+    st.markdown("**Option 1 — Speak your question:**")
+    if MIC_AVAILABLE:
+        spoken_text = speech_to_text(
+            language=lang["code"],
+            start_prompt="🎙️ Start Recording",
+            stop_prompt="⏹️ Stop & Transcribe",
+            just_once=True,
+            use_container_width=True,
+            key=f"stt_{lang_display}",
+        )
     else:
-        st.info("👆 Upload PDF documents to get started")
-    
-    # Document stats
-    st.markdown("---")
-    st.markdown("### 📊 Document Statistics")
-    
-    stat_col1, stat_col2, stat_col3 = st.columns(3)
-    with stat_col1:
-        st.metric("Documents", len(uploaded_files) if uploaded_files else 0)
-    with stat_col2:
-        st.metric("Pages", "0")
-    with stat_col3:
-        st.metric("Indexed", "0")
+        st.warning(
+            "⚠️ `streamlit-mic-recorder` not installed.\n\n"
+            "Run: `pip install streamlit-mic-recorder` then restart."
+        )
+        spoken_text = None
 
-# Footer
-st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-st.markdown("""
-    <div style="text-align: center; color: #666; padding: 1rem;">
-        <p>🇮🇳 Built for Digital India | Making Government Information Accessible</p>
-        <p style="font-size: 0.9rem;">Powered by AWS Transcribe, Polly & Bedrock</p>
-    </div>
-""", unsafe_allow_html=True)
+with col_text:
+    st.markdown("**Option 2 — Type your question:**")
+    typed_text = st.text_area(
+        "Type here…",
+        placeholder="e.g. What is PM Kisan Samman Nidhi?",
+        height=120,
+        label_visibility="collapsed",
+    )
+    submit_typed = st.button("🔍 Get Answer", use_container_width=True, type="primary")
+
+# Determine the active question
+question = ""
+if spoken_text and spoken_text.strip():
+    question = spoken_text.strip()
+elif submit_typed and typed_text.strip():
+    question = typed_text.strip()
+
+# ── Process & respond ──────────────────────────────────────────────────────────
+if question and question != st.session_state.last_question:
+    st.session_state.last_question = question
+    st.session_state.last_answer = ""  # clear stale answer
+
+    st.markdown(
+        f'<div class="question-box">🗣️ <strong>You asked:</strong> {question}</div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.spinner("🤖 AI Avenger is thinking…"):
+        try:
+            answer = ask_bedrock(question, lang["short"])
+            st.session_state.last_answer = answer
+
+        except ValueError as e:
+            st.error(f"🔑 Credentials Error: {e}")
+            st.info("Open `.streamlit/secrets.toml` and fill in your AWS keys, then restart the app.")
+            st.stop()
+
+        except (ClientError, NoCredentialsError) as e:
+            st.error(f"☁️ AWS Error: {e}")
+            st.stop()
+
+        except Exception as e:
+            st.error(f"❌ Unexpected error: {e}")
+            st.stop()
+
+elif question and question == st.session_state.last_question:
+    # Re-render: show the question again
+    st.markdown(
+        f'<div class="question-box">🗣️ <strong>You asked:</strong> {question}</div>',
+        unsafe_allow_html=True,
+    )
+
+# Always show the last answer (persists across reruns)
+if st.session_state.last_answer:
+    st.markdown(
+        f'<div class="answer-box">🤖 <strong>AI Avenger:</strong><br><br>{st.session_state.last_answer}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("")
+    if st.button("🔄 Ask another question", use_container_width=True):
+        st.session_state.last_question = ""
+        st.session_state.last_answer = ""
+        st.rerun()
+
+# ── Footer ─────────────────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown(
+    "<div style='text-align:center;color:#aaa;font-size:0.85rem'>"
+    "🇮🇳 Gram-Vani &nbsp;|&nbsp; AI Avenger Hackathon &nbsp;|&nbsp; "
+    "Powered by AWS Bedrock Claude 3.5 Sonnet"
+    "</div>",
+    unsafe_allow_html=True,
+)
