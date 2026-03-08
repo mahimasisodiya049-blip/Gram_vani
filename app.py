@@ -178,10 +178,10 @@ def ask_gemini(question: str, context: str, lang_short: str) -> str:
         )
     
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
         response = model.generate_content(prompt)
     except Exception:
-        model = genai.GenerativeModel("gemini-1.5-pro")
+        model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         
     return response.text
