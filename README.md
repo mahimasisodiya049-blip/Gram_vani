@@ -3,6 +3,9 @@
 
 A voice-first, multilingual RAG application that makes Indian government schemes instantly accessible to rural citizens — in their own language, using their voice.
 
+### Technical Note for Judges
+> Gram-Vani uses a modular LLM architecture; for this demo, we have implemented Gemini 1.5 Flash via Google AI Studio to handle long-context government PDFs, while maintaining a serverless AWS Lambda-ready backbone.
+
 ---
 
 ## 🏗️ Architecture — Hybrid RAG Pipeline
