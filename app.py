@@ -1,18 +1,11 @@
-"""Gram-Vani | AI Avenger — Final Hackathon Submission
-Hybrid RAG: Bhashini STT → PyMuPDF + Gemini 1.5 Flash → Answer in Hindi/Marathi/English
-"""
-
 import json
 import streamlit as st
 import google.generativeai as genai
 from streamlit_mic_recorder import speech_to_text
 import pymupdf
 
-# ── Gemini setup ───────────────────────────────────────────────────────────────
 genai.configure(api_key=st.secrets["GRAMVANI_GEMINI_KEY"])
-model = genai.GenerativeModel("gemini-1.5-flash")
 
-# ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Gram-Vani | AI Avenger",
     page_icon="🎙️",
@@ -20,7 +13,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Custom CSS ─────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
@@ -79,7 +71,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Brand header ───────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="brand-header">
   <h1>🎙️ Gram-Vani</h1>
@@ -88,7 +79,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ⚙️ Settings")
     lang_display = st.selectbox(
@@ -117,7 +107,6 @@ with st.sidebar:
     st.markdown("2. Speak or type your question")
     st.markdown("3. Get answer in your language")
 
-# ── Session state ──────────────────────────────────────────────────────────────
 if "pdf_text" not in st.session_state:
     st.session_state.pdf_text = ""
 if "pdf_name" not in st.session_state:
@@ -127,7 +116,6 @@ if "last_question" not in st.session_state:
 if "last_answer" not in st.session_state:
     st.session_state.last_answer = ""
 
-# ── PDF Upload & Extraction ────────────────────────────────────────────────────
 st.markdown("### 📄 Step 1: Upload a Government Scheme PDF")
 uploaded_file = st.file_uploader(
     "Upload a PDF (PM-Kisan, APY, PMAY, etc.)",
@@ -140,7 +128,6 @@ def extract_text_from_pdf(file) -> str:
     return "\n".join(page.get_text() for page in doc)
 
 if uploaded_file:
-    # Re-extract only when a new file is uploaded
     if uploaded_file.name != st.session_state.pdf_name:
         with st.spinner("📖 Reading document…"):
             st.session_state.pdf_text = extract_text_from_pdf(uploaded_file)
@@ -153,7 +140,6 @@ if uploaded_file:
 else:
     st.info("👆 Upload a PDF to get started. You can still ask general questions without one.")
 
-# ── Gemini RAG ─────────────────────────────────────────────────────────────────
 SYSTEM_PROMPTS = {
     "hi": (
         "आप 'Gram-Vani' हैं — AI Avenger टीम द्वारा बनाया गया एक सहायक, जो ग्रामीण "
@@ -190,10 +176,16 @@ def ask_gemini(question: str, context: str, lang_short: str) -> str:
             f"Question: {question}\n\n"
             f"Respond ONLY in {lang_display}."
         )
-    response = model.generate_content(prompt)
+    
+    try:
+        model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
+        response = model.generate_content(prompt)
+    except Exception:
+        model = genai.GenerativeModel("gemini-pro")
+        response = model.generate_content(prompt)
+        
     return response.text
 
-# ── Voice + Text Input ─────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown(f"### 🎤 Step 2: Ask Your Question in **{lang['label']}**")
 
@@ -226,14 +218,12 @@ with col_type:
     )
     submit = st.button("🔍 Get Answer", use_container_width=True, type="primary")
 
-# Determine active question
 question = ""
 if spoken and spoken.strip():
     question = spoken.strip()
 elif submit and typed.strip():
     question = typed.strip()
 
-# ── Process & Display ──────────────────────────────────────────────────────────
 if question and question != st.session_state.last_question:
     st.session_state.last_question = question
     st.session_state.last_answer = ""
@@ -261,7 +251,6 @@ elif question and question == st.session_state.last_question:
         unsafe_allow_html=True,
     )
 
-# Always render the last answer
 if st.session_state.last_answer:
     st.markdown(
         f'<div class="answer-box">📢 <strong>Gram-Vani responds:</strong><br><br>'
@@ -279,7 +268,6 @@ if st.session_state.last_answer:
         st.session_state.last_answer = ""
         st.rerun()
 
-# ── Footer ─────────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown(
     "<div style='text-align:center;color:#999;font-size:0.82rem'>"
